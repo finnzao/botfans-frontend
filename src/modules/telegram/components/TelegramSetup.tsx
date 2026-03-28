@@ -34,7 +34,10 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
   const [sessionLoading, setSessionLoading] = useState(false);
 
   async function handlePortalCode(code: string) {
-    if (!flowId) return;
+    if (!flowId) {
+      setPortalError('Sessão expirada. Clique em "voltar" e insira seu número novamente.');
+      return;
+    }
     setPortalError('');
     setPortalLoading(true);
     try {
@@ -52,7 +55,10 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
   }
 
   async function handleSessionCode(code: string) {
-    if (!flowId) return;
+    if (!flowId) {
+      setSessionError('Sessão expirada. Volte ao início e insira seu número novamente.');
+      return;
+    }
     setSessionError('');
     setSessionLoading(true);
     try {
@@ -74,7 +80,10 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
   }
 
   async function handle2fa(password: string) {
-    if (!flowId) return;
+    if (!flowId) {
+      setSessionError('Sessão expirada. Volte ao início e insira seu número novamente.');
+      return;
+    }
     setSessionError('');
     setSessionLoading(true);
     try {
@@ -107,14 +116,19 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
       )}
 
       {currentStep === 'portal_code' && (
-        <CodeInput
-          title="Código de verificação"
-          description="Enviamos um código para o seu Telegram. Verifique o app, SMS ou chamada recebida e digite abaixo."
-          buttonText="Verificar código"
-          loading={portalLoading}
-          error={portalError}
-          onSubmit={handlePortalCode}
-        />
+        <>
+          <CodeInput
+            title="Código de verificação"
+            description="Enviamos um código para o seu Telegram. Verifique o app, SMS ou chamada recebida e digite abaixo."
+            buttonText="Verificar código"
+            loading={portalLoading}
+            error={portalError}
+            onSubmit={handlePortalCode}
+          />
+          <button onClick={() => onStepChange('phone')} style={styles.backBtn}>
+            ← Voltar e usar outro número
+          </button>
+        </>
       )}
 
       {currentStep === 'capturing' && flowId && (
@@ -126,17 +140,22 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
       )}
 
       {currentStep === 'session_code' && (
-        <CodeInput
-          title="Código de conexão"
-          description="Enviamos um novo código para conectar o assistente. Verifique seu Telegram novamente."
-          descriptionBg="#E1F5EE"
-          descriptionBorder="#9FE1CB"
-          descriptionColor="#085041"
-          buttonText="Conectar assistente"
-          loading={sessionLoading}
-          error={sessionError}
-          onSubmit={handleSessionCode}
-        />
+        <>
+          <CodeInput
+            title="Código de conexão"
+            description="Enviamos um novo código para conectar o assistente. Verifique seu Telegram novamente."
+            descriptionBg="#E1F5EE"
+            descriptionBorder="#9FE1CB"
+            descriptionColor="#085041"
+            buttonText="Conectar assistente"
+            loading={sessionLoading}
+            error={sessionError}
+            onSubmit={handleSessionCode}
+          />
+          <button onClick={() => onStepChange('phone')} style={styles.backBtn}>
+            ← Voltar ao início
+          </button>
+        </>
       )}
 
       {currentStep === 'session_2fa' && (
@@ -164,3 +183,17 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
     </div>
   );
 }
+
+const styles: Record<string, React.CSSProperties> = {
+  backBtn: {
+    display: 'block',
+    margin: '20px auto 0',
+    padding: '8px 16px',
+    fontSize: 13,
+    color: '#888',
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    textDecoration: 'underline',
+  },
+};

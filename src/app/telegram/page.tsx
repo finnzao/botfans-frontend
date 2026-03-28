@@ -23,8 +23,17 @@ export default function TelegramPage() {
       const res = await getStatus(TEST_TENANT_ID);
       if (res.success && res.data) {
         const mapped = statusToStep(res.data.status);
-        setStep(mapped);
-        if (res.data.flowId) setFlowId(res.data.flowId);
+
+        // Se o status é intermediário (precisa de flowId) mas não temos flowId,
+        // significa que o flow do Redis expirou. Volta para o início.
+        const needsFlow: OnboardingStep[] = ['portal_code', 'capturing', 'session_code', 'session_2fa'];
+        if (needsFlow.includes(mapped) && !res.data.flowId) {
+          console.log(`[TelegramPage] Status "${res.data.status}" sem flowId — reiniciando do phone`);
+          setStep('phone');
+        } else {
+          setStep(mapped);
+          if (res.data.flowId) setFlowId(res.data.flowId);
+        }
       }
     } catch {
       // no session
@@ -49,7 +58,6 @@ export default function TelegramPage() {
 
   return (
     <div style={styles.page}>
-      {/* Sidebar */}
       <aside style={styles.sidebar}>
         <div style={styles.logo}>
           <div style={styles.logoIcon}>B</div>
@@ -92,7 +100,6 @@ export default function TelegramPage() {
         </div>
       </aside>
 
-      {/* Main */}
       <main style={styles.main}>
         <header style={styles.header}>
           <div>
@@ -142,8 +149,6 @@ export default function TelegramPage() {
 
 const styles: Record<string, React.CSSProperties> = {
   page: { display: 'flex', minHeight: '100vh' },
-
-  // Sidebar
   sidebar: {
     width: 230, background: '#fff', borderRight: '1px solid #e5e7eb',
     padding: '20px 0', flexShrink: 0, display: 'flex', flexDirection: 'column',
@@ -181,8 +186,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tenantName: { fontSize: 13, fontWeight: 500, margin: 0, color: '#333' },
   tenantPlan: { fontSize: 11, color: '#999', margin: 0 },
-
-  // Main
   main: { flex: 1, padding: '28px 36px', maxWidth: 820 },
   header: {
     display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 28,
@@ -207,8 +210,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   statusTitle: { fontSize: 14, fontWeight: 600, color: '#085041', margin: '0 0 2px' },
   statusDesc: { fontSize: 12, color: '#0F6E56', margin: 0 },
-
-  // Loading
   loadingPage: {
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     justifyContent: 'center', minHeight: '100vh',

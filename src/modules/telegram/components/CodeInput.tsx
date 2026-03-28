@@ -13,13 +13,12 @@ interface Props {
   loading?: boolean;
   error?: string;
   onSubmit: (code: string) => void;
-  /** Se true, mostra campo de senha ao invés dos dígitos */
+  /** Se true, mostra campo de senha ao invés do campo de código */
   passwordMode?: boolean;
   passwordLabel?: string;
 }
 
 export function CodeInput({
-  length = 5,
   title,
   description,
   descriptionColor = '#633806',
@@ -32,46 +31,21 @@ export function CodeInput({
   passwordMode = false,
   passwordLabel = 'Senha',
 }: Props) {
-  const [code, setCode] = useState<string[]>(Array(length).fill(''));
+  const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    if (!passwordMode) inputRefs.current[0]?.focus();
+    inputRef.current?.focus();
   }, [passwordMode]);
-
-  function handleChange(index: number, value: string) {
-    if (value.length > 1) value = value.slice(-1);
-    if (!/^\d*$/.test(value)) return;
-    const next = [...code];
-    next[index] = value;
-    setCode(next);
-    if (value && index < length - 1) inputRefs.current[index + 1]?.focus();
-  }
-
-  function handleKeyDown(index: number, e: React.KeyboardEvent) {
-    if (e.key === 'Backspace' && !code[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    }
-  }
-
-  function handlePaste(e: React.ClipboardEvent) {
-    e.preventDefault();
-    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, length);
-    if (pasted.length >= length) {
-      const digits = pasted.split('').slice(0, length);
-      setCode(digits);
-      inputRefs.current[length - 1]?.focus();
-    }
-  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (passwordMode) {
       if (password.length > 0) onSubmit(password);
     } else {
-      const full = code.join('');
-      if (full.length === length) onSubmit(full);
+      const trimmed = code.trim();
+      if (trimmed.length > 0) onSubmit(trimmed);
     }
   }
 
@@ -88,6 +62,7 @@ export function CodeInput({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
             <label style={{ fontSize: 13, fontWeight: 500, color: '#333' }}>{passwordLabel}</label>
             <input
+              ref={inputRef}
               type="password"
               placeholder="Digite sua senha de verificação em duas etapas"
               value={password}
@@ -98,25 +73,24 @@ export function CodeInput({
             />
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }} onPaste={handlePaste}>
-            {code.map((digit, i) => (
-              <input
-                key={i}
-                ref={el => { inputRefs.current[i] = el; }}
-                type="text"
-                inputMode="numeric"
-                maxLength={1}
-                value={digit}
-                onChange={e => handleChange(i, e.target.value)}
-                onKeyDown={e => handleKeyDown(i, e)}
-                style={{
-                  width: 48, height: 56, textAlign: 'center', fontSize: 22,
-                  fontWeight: 700, fontFamily: 'monospace',
-                  border: `2px solid ${digit ? '#185FA5' : '#ddd'}`,
-                  borderRadius: 10, outline: 'none', transition: 'border-color 0.2s',
-                }}
-              />
-            ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: 340 }}>
+            <label style={{ fontSize: 13, fontWeight: 500, color: '#333' }}>Código de verificação</label>
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder="Ex: f2HHS4A04Ug"
+              value={code}
+              onChange={e => setCode(e.target.value)}
+              required
+              autoFocus
+              autoComplete="one-time-code"
+              style={{
+                padding: '14px 16px', fontSize: 20, fontWeight: 700,
+                fontFamily: 'monospace', letterSpacing: 2, textAlign: 'center',
+                border: '2px solid #ddd', borderRadius: 10, outline: 'none',
+                transition: 'border-color 0.2s',
+              }}
+            />
           </div>
         )}
 

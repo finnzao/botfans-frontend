@@ -4,10 +4,6 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { getSessionStatus } from '../api';
 import type { SessionStatus } from '@/core/interfaces';
 
-/**
- * Hook que faz polling do status da sessão Telegram a cada N segundos.
- * Útil durante o onboarding quando o worker Python está processando.
- */
 export function useSessionPolling(tenantId: string, interval = 3000) {
   const [status, setStatus] = useState<SessionStatus | 'not_configured'>('not_configured');
   const [loading, setLoading] = useState(true);
@@ -22,7 +18,7 @@ export function useSessionPolling(tenantId: string, interval = 3000) {
         if (res.data.id) setSessionId(res.data.id);
       }
     } catch {
-      // silently fail - will retry
+      // silently fail
     } finally {
       setLoading(false);
     }
@@ -34,10 +30,7 @@ export function useSessionPolling(tenantId: string, interval = 3000) {
   }
 
   function stopPolling() {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }
 
   useEffect(() => {

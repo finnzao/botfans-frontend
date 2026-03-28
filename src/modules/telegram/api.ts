@@ -40,7 +40,28 @@ export function getStatus(tenantId: string) {
   return request<TelegramSession & { status: string; flowId?: string }>(`/status?tenantId=${tenantId}`);
 }
 
+/** Consulta status por sessão (usado pelo hook de polling) */
+export function getSessionStatus(tenantId: string) {
+  return request<TelegramSession & { status: string; id?: string }>(`/status?tenantId=${tenantId}`);
+}
+
 /** Lista contatos capturados */
 export function getContacts(tenantId: string) {
   return request<{ contacts: IContact[]; total: number }>(`/contacts?tenantId=${tenantId}`);
+}
+
+/** Inicia sessão com credenciais manuais (fluxo antigo) */
+export function initSession(data: { phone: string; apiId: string; apiHash: string; tenantId: string }) {
+  return request<{ id: string }>('/init', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/** Verifica código (fluxo antigo) */
+export function verifyCode(data: { sessionId: string; code: string; password2fa?: string }) {
+  return request<{ sessionId: string; status: string }>('/verify', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
 }

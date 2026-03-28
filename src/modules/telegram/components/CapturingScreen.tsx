@@ -8,16 +8,6 @@ interface Props {
   flowId: string;
 }
 
-/**
- * Tela de "aguarde" enquanto o backend:
- * 1. Faz login no my.telegram.org com o código
- * 2. Acessa /apps
- * 3. Cria App se necessário
- * 4. Captura api_id e api_hash
- * 5. Inicia sessão Telethon e envia novo código
- * 
- * Faz polling no /api/telegram/status a cada 2s
- */
 export function CapturingScreen({ onComplete, onError, flowId }: Props) {
   const polling = useRef<ReturnType<typeof setInterval> | null>(null);
 

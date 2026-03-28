@@ -10,7 +10,6 @@ const STEPS: { key: OnboardingStep; label: string }[] = [
   { key: 'active', label: 'Ativo' },
 ];
 
-// Steps que compartilham posição no indicador
 const STEP_POSITION: Record<OnboardingStep, number> = {
   phone: 0,
   portal_code: 1,
