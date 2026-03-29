@@ -13,21 +13,21 @@ def get_connection():
 
 
 def get_session_credentials(session_id: str) -> dict | None:
-    """Busca api_id, api_hash, phone de uma sessão."""
     try:
         conn = get_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            "SELECT id, tenant_id, phone, api_id, api_hash_encrypted, status FROM telegram_sessions WHERE id = %s",
+            "SELECT id, tenant_id, phone, api_id, api_hash_encrypted, status, session_string "
+            "FROM telegram_sessions WHERE id = %s",
             (session_id,),
         )
         row = cur.fetchone()
         cur.close()
         conn.close()
         if row:
-            log.info(f"Credenciais carregadas para sessão {session_id[:8]}...")
+            log.info(f"Credenciais carregadas para sessão {session_id[:8]}... (tem session_string: {bool(row.get('session_string'))})")
             return dict(row)
-        log.warning(f"Sessão {session_id} não encontrada no banco")
+        log.warning(f"Sessão {session_id} não encontrada")
         return None
     except Exception as e:
         log.error(f"Erro ao buscar sessão: {e}")
@@ -35,7 +35,6 @@ def get_session_credentials(session_id: str) -> dict | None:
 
 
 def update_session_status(session_id: str, status: str):
-    """Atualiza o status da sessão no banco."""
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -51,8 +50,40 @@ def update_session_status(session_id: str, status: str):
         log.error(f"Erro ao atualizar status: {e}")
 
 
+def save_session_string(session_id: str, session_string: str):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE telegram_sessions SET session_string = %s, updated_at = NOW() WHERE id = %s",
+            (session_string, session_id),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        log.info(f"Session string salva para {session_id[:8]}... ({len(session_string)} chars)")
+    except Exception as e:
+        log.error(f"Erro ao salvar session string: {e}")
+
+
+def get_active_sessions() -> list[dict]:
+    try:
+        conn = get_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT id, tenant_id, phone, api_id, api_hash_encrypted, session_string "
+            "FROM telegram_sessions WHERE status = 'active'"
+        )
+        sessions = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [dict(s) for s in sessions]
+    except Exception as e:
+        log.error(f"Erro ao buscar sessões ativas: {e}")
+        return []
+
+
 def save_contact(tenant_id: str, user):
-    """Salva ou atualiza um contato capturado."""
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -83,15 +114,11 @@ def save_contact(tenant_id: str, user):
 
 
 def save_message(tenant_id: str, contact_id: str, direction: str, content: str, responded_by: str = "ai"):
-    """Salva uma mensagem no banco."""
     try:
         conn = get_connection()
         cur = conn.cursor()
         cur.execute(
-            """
-            INSERT INTO messages (tenant_id, contact_id, direction, content, responded_by)
-            VALUES (%s, %s, %s, %s, %s)
-            """,
+            "INSERT INTO messages (tenant_id, contact_id, direction, content, responded_by) VALUES (%s, %s, %s, %s, %s)",
             (tenant_id, contact_id, direction, content, responded_by),
         )
         conn.commit()
@@ -102,7 +129,6 @@ def save_message(tenant_id: str, contact_id: str, direction: str, content: str, 
 
 
 def get_ai_profile(tenant_id: str) -> dict | None:
-    """Busca o perfil da IA configurado para o tenant."""
     try:
         conn = get_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

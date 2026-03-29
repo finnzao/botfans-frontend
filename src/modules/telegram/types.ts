@@ -5,20 +5,15 @@ export interface TelegramSession extends IChannelSession {
   phone: string;
 }
 
-/**
- * Etapas do onboarding simplificado.
- * A cliente só vê: número → código portal → aguarde → código sessão → (2FA?) → perfil IA → ativo
- */
 export type OnboardingStep =
-  | 'phone'                 // Digita apenas o número
-  | 'portal_code'           // Código que chegou no Telegram (para my.telegram.org)
-  | 'capturing'             // Aguarde... capturando api_id/api_hash automaticamente
-  | 'session_code'          // Segundo código (para autenticar Telethon)
-  | 'session_2fa'           // Senha 2FA (se a conta tiver)
-  | 'configure_ai'          // Configura perfil da IA
-  | 'active';               // Selfbot rodando
+  | 'phone'
+  | 'portal_code'
+  | 'capturing'
+  | 'session_code'
+  | 'session_2fa'
+  | 'configure_ai'
+  | 'active';
 
-/** Mapa de status do backend → step do frontend */
 export function statusToStep(status: SessionStatus | string): OnboardingStep {
   const map: Record<string, OnboardingStep> = {
     idle: 'phone',

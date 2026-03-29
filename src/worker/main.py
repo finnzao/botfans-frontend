@@ -1,18 +1,3 @@
-"""
-BotFans Telegram Worker
-
-Escuta mensagens do Redis publicadas pelo frontend (Next.js)
-e gerencia sessões Telethon para cada tenant.
-
-Canais Redis:
-  - telegram:start_session → Inicia sessão ou verifica código
-  - telegram:init          → Fluxo antigo (com credenciais manuais)
-  - telegram:verify        → Fluxo antigo (verificar código)
-
-Uso:
-  python main.py
-"""
-
 import os
 import sys
 import json
@@ -34,33 +19,66 @@ log = get_logger("worker")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
-# Canais que o worker escuta
-CHANNELS = [
+QUEUE_NAME = "queue:telegram:tasks"
+PUBSUB_CHANNELS = [
     "telegram:start_session",
     "telegram:init",
     "telegram:verify",
 ]
 
 
+async def get_redis():
+    return aioredis.from_url(REDIS_URL, decode_responses=True)
+
+
+async def update_flow_status(flow_id: str, status: str, extra: dict = None):
+    try:
+        r = await get_redis()
+        key = f"flow:{flow_id}"
+        data = await r.get(key)
+        if data:
+            flow = json.loads(data)
+            old_step = flow.get("step", "?")
+            flow["step"] = status
+            if extra:
+                flow.update(extra)
+            ttl = await r.ttl(key)
+            if ttl > 0:
+                await r.setex(key, ttl, json.dumps(flow))
+                log.info(f"Flow {flow_id[:8]}... transição: {old_step} → {status}")
+        else:
+            log.warning(f"Flow {flow_id[:8]}... não encontrado (expirado?)")
+        await r.aclose()
+    except Exception as e:
+        log.error(f"Erro ao atualizar flow: {e}")
+
+
+async def dispatch_task(data: dict):
+    channel = data.pop("_channel", "telegram:start_session")
+    data.pop("_publishedAt", None)
+
+    if channel == "telegram:start_session":
+        await handle_start_session(data)
+    elif channel == "telegram:init":
+        await handle_init(data)
+    elif channel == "telegram:verify":
+        await handle_verify(data)
+    else:
+        log.warning(f"Canal desconhecido: {channel}")
+
+
 async def handle_start_session(data: dict):
-    """
-    Trata mensagens do canal telegram:start_session.
-    
-    Pode conter 'action' para diferenciar:
-      - sem action     → iniciar sessão (enviar código Telethon)
-      - verify_code    → verificar código da sessão
-      - verify_2fa     → verificar senha 2FA
-    """
     action = data.get("action")
     session_id = data["sessionId"]
     tenant_id = data["tenantId"]
     phone = data["phone"]
     api_id = data["apiId"]
     api_hash = data["apiHash"]
+    flow_id = data.get("flowId")
 
     log.info(
-        f"Recebido start_session | action={action or 'start'} | "
-        f"session={session_id[:8]}... | phone={phone[:6]}***"
+        f"Processando start_session | action={action or 'start'} | "
+        f"session={session_id[:8]}... | flowId={flow_id[:8] + '...' if flow_id else 'N/A'}"
     )
 
     if action == "verify_code":
@@ -70,11 +88,8 @@ async def handle_start_session(data: dict):
             return
         result = await verify_code(session_id, tenant_id, phone, code, api_id, api_hash)
         log.info(f"verify_code resultado: {result}")
-
-        # Atualizar flow no Redis se necessário
-        flow_id = data.get("flowId")
-        if flow_id and result.get("status") == "awaiting_2fa":
-            await update_flow_status(flow_id, "awaiting_2fa")
+        if flow_id:
+            await update_flow_status(flow_id, result.get("status", "error"))
 
     elif action == "verify_2fa":
         password = data.get("password2fa")
@@ -83,36 +98,43 @@ async def handle_start_session(data: dict):
             return
         result = await verify_2fa(session_id, tenant_id, password)
         log.info(f"verify_2fa resultado: {result}")
+        if flow_id:
+            await update_flow_status(flow_id, result.get("status", "error"))
 
     else:
-        # Iniciar sessão (enviar código)
         result = await start_session(session_id, tenant_id, phone, api_id, api_hash)
         log.info(f"start_session resultado: {result}")
 
+        if flow_id:
+            new_status = result.get("status", "error")
+            if new_status == "error":
+                await update_flow_status(flow_id, "error", {
+                    "errorMessage": result.get("error", "Erro ao iniciar sessão")
+                })
+            else:
+                await update_flow_status(flow_id, new_status)
+
 
 async def handle_init(data: dict):
-    """Trata mensagens do canal telegram:init (fluxo antigo)."""
     session_id = data["sessionId"]
     tenant_id = data["tenantId"]
     phone = data["phone"]
     api_id = data["apiId"]
     api_hash = data["apiHash"]
 
-    log.info(f"Recebido init | session={session_id[:8]}...")
+    log.info(f"Processando init | session={session_id[:8]}...")
     result = await start_session(session_id, tenant_id, phone, api_id, api_hash)
     log.info(f"init resultado: {result}")
 
 
 async def handle_verify(data: dict):
-    """Trata mensagens do canal telegram:verify (fluxo antigo)."""
     session_id = data["sessionId"]
     tenant_id = data["tenantId"]
     code = data["code"]
     password_2fa = data.get("password2fa")
 
-    log.info(f"Recebido verify | session={session_id[:8]}...")
+    log.info(f"Processando verify | session={session_id[:8]}...")
 
-    # Precisamos das credenciais do banco
     from database import get_session_credentials
     creds = get_session_credentials(session_id)
     if not creds:
@@ -129,65 +151,64 @@ async def handle_verify(data: dict):
     log.info(f"verify resultado: {result}")
 
 
-async def update_flow_status(flow_id: str, status: str):
-    """Atualiza o status no flow do Redis."""
+async def process_pending_tasks():
+    """Processa tasks que ficaram na fila enquanto o worker estava offline."""
     try:
-        r = aioredis.from_url(REDIS_URL)
-        key = f"flow:{flow_id}"
-        data = await r.get(key)
-        if data:
-            flow = json.loads(data)
-            flow["step"] = status
-            ttl = await r.ttl(key)
-            if ttl > 0:
-                await r.setex(key, ttl, json.dumps(flow))
-                log.info(f"Flow {flow_id[:8]}... atualizado para {status}")
+        r = await get_redis()
+        count = await r.llen(QUEUE_NAME)
+        if count == 0:
+            log.info("Nenhuma task pendente na fila")
+            await r.aclose()
+            return
+
+        log.info(f"Processando {count} tasks pendentes da fila...")
+
+        for i in range(count):
+            raw = await r.rpop(QUEUE_NAME)
+            if not raw:
+                break
+            try:
+                data = json.loads(raw)
+                log.info(f"Task pendente [{i+1}/{count}]: {data.get('_channel', '?')}")
+                await dispatch_task(data)
+            except json.JSONDecodeError:
+                log.error(f"JSON inválido na fila: {raw[:100]}")
+            except Exception as e:
+                log.error(f"Erro ao processar task pendente: {e}")
+
         await r.aclose()
+        log.info(f"✓ {count} tasks pendentes processadas")
     except Exception as e:
-        log.error(f"Erro ao atualizar flow: {e}")
+        log.error(f"Erro ao processar fila pendente: {e}")
 
 
-async def subscriber():
-    """Loop principal: escuta os canais Redis e despacha para handlers."""
-    log.info(f"Conectando ao Redis: {REDIS_URL}")
+async def queue_consumer():
+    """Consome tasks da fila Redis (BRPOP) — garante entrega mesmo se PubSub falhar."""
+    log.info("Iniciando consumer de fila (BRPOP)...")
+    r = await get_redis()
 
-    r = aioredis.from_url(REDIS_URL, decode_responses=True)
-    pubsub = r.pubsub()
-
-    await pubsub.subscribe(*CHANNELS)
-    log.info(f"✓ Inscrito nos canais: {', '.join(CHANNELS)}")
-
-    handler_map = {
-        "telegram:start_session": handle_start_session,
-        "telegram:init": handle_init,
-        "telegram:verify": handle_verify,
-    }
-
-    async for message in pubsub.listen():
-        if message["type"] != "message":
-            continue
-
-        channel = message["channel"]
+    while True:
         try:
-            data = json.loads(message["data"])
-        except json.JSONDecodeError:
-            log.error(f"JSON inválido no canal {channel}: {message['data'][:100]}")
-            continue
+            result = await r.brpop(QUEUE_NAME, timeout=5)
+            if result is None:
+                continue
 
-        handler = handler_map.get(channel)
-        if handler:
-            # Executa em background para não bloquear o subscriber
-            asyncio.create_task(safe_handle(handler, data, channel))
-        else:
-            log.warning(f"Canal sem handler: {channel}")
-
-
-async def safe_handle(handler, data: dict, channel: str):
-    """Wrapper que captura exceções de handlers."""
-    try:
-        await handler(data)
-    except Exception as e:
-        log.error(f"Exceção no handler de {channel}: {e}", exc_info=True)
+            _, raw = result
+            try:
+                data = json.loads(raw)
+                await dispatch_task(data)
+            except json.JSONDecodeError:
+                log.error(f"JSON inválido na fila: {raw[:100]}")
+        except aioredis.ConnectionError as e:
+            log.error(f"Redis desconectou no consumer: {e}")
+            await asyncio.sleep(3)
+            try:
+                r = await get_redis()
+            except Exception:
+                pass
+        except Exception as e:
+            log.error(f"Erro no consumer: {e}")
+            await asyncio.sleep(1)
 
 
 async def main():
@@ -195,12 +216,15 @@ async def main():
     log.info("  BotFans Telegram Worker iniciando...")
     log.info("=" * 60)
 
-    # 1. Restaurar sessões que estavam ativas
+    # 1. Restaurar sessões ativas do banco
     await restore_active_sessions()
 
-    # 2. Escutar Redis
-    log.info("Iniciando subscriber Redis...")
-    await subscriber()
+    # 2. Processar tasks que ficaram na fila enquanto offline
+    await process_pending_tasks()
+
+    # 3. Consumir fila continuamente
+    log.info("Aguardando tasks...")
+    await queue_consumer()
 
 
 if __name__ == "__main__":

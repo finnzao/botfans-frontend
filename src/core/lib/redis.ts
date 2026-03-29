@@ -5,11 +5,10 @@ const log = createLogger('Redis');
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
-/** TTLs em segundos */
 const TTL = {
-  FLOW: 60 * 30,       // 30 min — fluxo de onboarding (era 15 min, pouco pra quem demora)
-  SESSION: 60 * 60,    // 1 hora — estado de sessão temporário
-  STEL_TOKEN: 60 * 55, // 55 min — cookie do my.telegram.org (expira em ~1h)
+  FLOW: 60 * 30,
+  SESSION: 60 * 60,
+  STEL_TOKEN: 60 * 55,
 } as const;
 
 const globalForRedis = globalThis as typeof globalThis & {
@@ -24,7 +23,7 @@ function createRedisClient(): Redis {
     maxRetriesPerRequest: 3,
     retryStrategy(times) {
       if (times > 5) {
-        log.error(`Desistindo após ${times} tentativas de reconexão`);
+        log.error(`Desistindo após ${times} tentativas`);
         return null;
       }
       const delay = Math.min(times * 500, 3000);
@@ -43,10 +42,6 @@ function createRedisClient(): Redis {
   client.on('connect', () => {
     globalForRedis._redisErrorLogged = false;
     log.info('Conectado');
-  });
-
-  client.on('reconnecting', () => {
-    log.warn('Reconectando...');
   });
 
   return client;
@@ -74,26 +69,36 @@ export const CHANNELS = {
   TELEGRAM_MESSAGE: 'telegram:message',
 } as const;
 
-// ─── Publish ───
+// Queue names (Redis Lists)
+export const QUEUES = {
+  TELEGRAM_TASKS: 'queue:telegram:tasks',
+} as const;
 
+// Publica via PubSub E enfileira na lista (garante entrega mesmo se worker não está ouvindo)
 export async function publishToWorker(channel: string, data: Record<string, unknown>) {
   try {
-    const payload = JSON.stringify(data);
-    await getRedis().publish(channel, payload);
-    log.info(`Publicado em ${channel}`, { payloadSize: payload.length, keys: Object.keys(data) });
+    const payload = JSON.stringify({ ...data, _channel: channel, _publishedAt: new Date().toISOString() });
+    const redis = getRedis();
+
+    // 1. Enfileirar na lista (persistente, worker consome com BRPOP)
+    await redis.lpush(QUEUES.TELEGRAM_TASKS, payload);
+
+    // 2. PubSub para notificar worker imediatamente (se estiver ouvindo)
+    await redis.publish(channel, payload);
+
+    log.info(`Publicado em ${channel} + fila`, { payloadSize: payload.length, keys: Object.keys(data) });
   } catch (err) {
     log.error(`Publish falhou em ${channel}`, err);
   }
 }
 
-// ─── Session State (fluxo antigo com sessionId) ───
+// --- Session State ---
 
 export async function setSessionState(sessionId: string, state: Record<string, unknown>) {
   const key = `session:${sessionId}`;
   try {
     const enriched = { ...state, _updatedAt: new Date().toISOString() };
     await getRedis().setex(key, TTL.SESSION, JSON.stringify(enriched));
-    log.debug(`setSessionState OK`, { key, step: state.step, ttl: TTL.SESSION });
   } catch (err) {
     log.error('setSessionState falhou', { key, error: err });
   }
@@ -103,21 +108,15 @@ export async function getSessionState(sessionId: string) {
   const key = `session:${sessionId}`;
   try {
     const data = await getRedis().get(key);
-    if (!data) {
-      log.debug(`getSessionState: chave não encontrada`, { key });
-      return null;
-    }
-    const ttl = await getRedis().ttl(key);
-    const parsed = JSON.parse(data);
-    log.debug(`getSessionState OK`, { key, step: parsed.step, ttlRestante: ttl });
-    return parsed;
+    if (!data) return null;
+    return JSON.parse(data);
   } catch (err) {
     log.error('getSessionState falhou', { key, error: err });
     return null;
   }
 }
 
-// ─── Flow State (fluxo novo simplificado com flowId) ───
+// --- Flow State ---
 
 export async function setFlowState(flowId: string, state: Record<string, unknown>) {
   const key = `flow:${flowId}`;
@@ -135,7 +134,7 @@ export async function getFlowState(flowId: string) {
   try {
     const data = await getRedis().get(key);
     if (!data) {
-      log.warn(`getFlowState: chave expirada ou inexistente`, { key });
+      log.warn(`getFlowState: chave expirada`, { key });
       return null;
     }
     const ttl = await getRedis().ttl(key);
@@ -148,14 +147,11 @@ export async function getFlowState(flowId: string) {
   }
 }
 
-/** Renova o TTL de um flow sem alterar dados (útil enquanto cliente está ativa no frontend) */
 export async function touchFlowState(flowId: string) {
   const key = `flow:${flowId}`;
   try {
     const renewed = await getRedis().expire(key, TTL.FLOW);
-    if (!renewed) {
-      log.warn(`touchFlowState: chave já expirada`, { key });
-    }
+    if (!renewed) log.warn(`touchFlowState: chave expirada`, { key });
     return !!renewed;
   } catch {
     return false;
@@ -166,13 +162,12 @@ export async function deleteFlowState(flowId: string) {
   const key = `flow:${flowId}`;
   try {
     await getRedis().del(key);
-    log.debug(`deleteFlowState OK`, { key });
   } catch (err) {
     log.warn('deleteFlowState falhou', { key, error: err });
   }
 }
 
-// ─── Stel Token (cookie do my.telegram.org, separado para reuso) ───
+// --- Stel Token ---
 
 export async function saveStelToken(flowId: string, token: string) {
   const key = `stel:${flowId}`;
@@ -188,7 +183,7 @@ export async function getStelToken(flowId: string): Promise<string | null> {
   const key = `stel:${flowId}`;
   try {
     const token = await getRedis().get(key);
-    if (!token) log.warn('getStelToken: token expirado', { key });
+    if (!token) log.warn('getStelToken: expirado', { key });
     return token;
   } catch {
     return null;
