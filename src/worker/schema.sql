@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS telegram_sessions (
     api_id          INTEGER,
     api_hash_encrypted VARCHAR(255),
     status          VARCHAR(50) NOT NULL DEFAULT 'idle',
+    session_string  TEXT,
+    error_message   TEXT,
     created_at      TIMESTAMP DEFAULT NOW(),
     updated_at      TIMESTAMP DEFAULT NOW()
 );
@@ -44,6 +46,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     is_new              BOOLEAN DEFAULT true,
     first_contact_at    TIMESTAMP DEFAULT NOW(),
     last_contact_at     TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW(),
     UNIQUE(tenant_id, telegram_user_id)
 );
 
@@ -64,3 +67,5 @@ CREATE INDEX IF NOT EXISTS idx_contacts_last_contact ON contacts(tenant_id, last
 CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_tenant ON messages(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON telegram_sessions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_active ON telegram_sessions(status) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_messages_contact_recent ON messages(tenant_id, contact_id, created_at DESC);

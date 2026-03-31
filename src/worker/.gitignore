@@ -1,0 +1,14 @@
+# Logs
+logs/
+
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Sessions (legacy file-based — não mais usadas)
+sessions/
+*.session
