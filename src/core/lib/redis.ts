@@ -69,21 +69,16 @@ export const CHANNELS = {
   TELEGRAM_MESSAGE: 'telegram:message',
 } as const;
 
-// Queue names (Redis Lists)
 export const QUEUES = {
   TELEGRAM_TASKS: 'queue:telegram:tasks',
 } as const;
 
-// Publica via PubSub E enfileira na lista (garante entrega mesmo se worker não está ouvindo)
 export async function publishToWorker(channel: string, data: Record<string, unknown>) {
   try {
     const payload = JSON.stringify({ ...data, _channel: channel, _publishedAt: new Date().toISOString() });
     const redis = getRedis();
 
-    // 1. Enfileirar na lista (persistente, worker consome com BRPOP)
     await redis.lpush(QUEUES.TELEGRAM_TASKS, payload);
-
-    // 2. PubSub para notificar worker imediatamente (se estiver ouvindo)
     await redis.publish(channel, payload);
 
     log.info(`Publicado em ${channel} + fila`, { payloadSize: payload.length, keys: Object.keys(data) });

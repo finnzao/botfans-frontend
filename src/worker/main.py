@@ -16,8 +16,11 @@ from session_manager import (
     verify_2fa,
     restore_active_sessions,
     disconnect_session,
+    reconnect_session,
+    auto_reconnect_loop,
     active_clients,
     get_active_sessions_info,
+    is_session_restoring,
 )
 
 log = get_logger("worker")
@@ -34,9 +37,27 @@ PUBSUB_CHANNELS = [
 # Controle de shutdown graceful
 _shutdown_event = asyncio.Event()
 
+# Pool de conexões Redis (reutilizável)
+_redis_pool: aioredis.Redis | None = None
 
-async def get_redis():
-    return aioredis.from_url(REDIS_URL, decode_responses=True)
+
+async def get_redis() -> aioredis.Redis:
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = aioredis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            max_connections=10,
+            retry_on_timeout=True,
+        )
+    return _redis_pool
+
+
+async def close_redis():
+    global _redis_pool
+    if _redis_pool:
+        await _redis_pool.aclose()
+        _redis_pool = None
 
 
 async def update_flow_status(flow_id: str, status: str, extra: dict = None):
@@ -51,15 +72,17 @@ async def update_flow_status(flow_id: str, status: str, extra: dict = None):
             flow["step"] = status
             if extra:
                 flow.update(extra)
+            flow["_updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             ttl = await r.ttl(key)
             if ttl > 0:
                 await r.setex(key, ttl, json.dumps(flow))
                 log.info(f"Flow atualizado | {flow_id[:8]}... | {old_step} → {status} | TTL={ttl}s")
             else:
-                log.warning(f"Flow {flow_id[:8]}... sem TTL válido ({ttl})")
+                # TTL expirou, recriar com 30 min
+                await r.setex(key, 1800, json.dumps(flow))
+                log.warning(f"Flow {flow_id[:8]}... sem TTL — recriado com 30min")
         else:
             log.warning(f"Flow {flow_id[:8]}... não encontrado no Redis (expirado?)")
-        await r.aclose()
     except Exception as e:
         log.error(f"Erro ao atualizar flow | {flow_id[:8]}... | {e}")
 
@@ -69,7 +92,6 @@ async def dispatch_task(data: dict):
     channel = data.pop("_channel", "telegram:start_session")
     published_at = data.pop("_publishedAt", None)
 
-    # Calcular latência (tempo entre publish e processamento)
     latency_ms = 0
     if published_at:
         try:
@@ -79,20 +101,41 @@ async def dispatch_task(data: dict):
         except Exception:
             pass
 
+    session_id = data.get("sessionId", "?")
+
+    # Se a sessão está sendo restaurada, esperar antes de processar
+    if is_session_restoring(session_id):
+        log.info(f"Sessão {session_id[:8]}... está sendo restaurada — aguardando...")
+        for _ in range(30):  # Esperar até 30 segundos
+            await asyncio.sleep(1)
+            if not is_session_restoring(session_id):
+                break
+        if is_session_restoring(session_id):
+            log.warning(f"Sessão {session_id[:8]}... ainda restaurando após 30s — processando mesmo assim")
+
     log.info(
         f"Dispatch task | channel={channel} | "
-        f"keys={list(data.keys())} | "
+        f"session={session_id[:8]}... | "
         f"latency={latency_ms}ms"
     )
 
-    if channel == "telegram:start_session":
-        await handle_start_session(data)
-    elif channel == "telegram:init":
-        await handle_init(data)
-    elif channel == "telegram:verify":
-        await handle_verify(data)
-    else:
-        log.warning(f"Canal desconhecido: {channel}")
+    try:
+        if channel == "telegram:start_session":
+            await handle_start_session(data)
+        elif channel == "telegram:init":
+            await handle_init(data)
+        elif channel == "telegram:verify":
+            await handle_verify(data)
+        else:
+            log.warning(f"Canal desconhecido: {channel}")
+    except Exception as e:
+        log.error(f"Erro no dispatch | channel={channel} | {type(e).__name__}: {e}", exc_info=True)
+        # Tentar atualizar flow com erro
+        flow_id = data.get("flowId")
+        if flow_id:
+            await update_flow_status(flow_id, "error", {
+                "errorMessage": f"Erro interno: {type(e).__name__}"
+            })
 
 
 async def handle_start_session(data: dict):
@@ -113,37 +156,47 @@ async def handle_start_session(data: dict):
 
     start_time = time.perf_counter()
 
-    if action == "verify_code":
-        code = data.get("code")
-        if not code:
-            log.error("verify_code chamado sem código!")
-            return
-        log.info(f"Ação: verify_code | code_length={len(code)}")
-        result = await verify_code(session_id, tenant_id, phone, code, api_id, api_hash)
+    try:
+        if action == "verify_code":
+            code = data.get("code")
+            if not code:
+                log.error("verify_code chamado sem código!")
+                if flow_id:
+                    await update_flow_status(flow_id, "error", {"errorMessage": "Código não informado"})
+                return
+            result = await verify_code(session_id, tenant_id, phone, code, api_id, api_hash)
 
-    elif action == "verify_2fa":
-        password = data.get("password2fa")
-        if not password:
-            log.error("verify_2fa chamado sem senha!")
-            return
-        log.info("Ação: verify_2fa | password=***")
-        result = await verify_2fa(session_id, tenant_id, password)
+        elif action == "verify_2fa":
+            password = data.get("password2fa")
+            if not password:
+                log.error("verify_2fa chamado sem senha!")
+                if flow_id:
+                    await update_flow_status(flow_id, "error", {"errorMessage": "Senha não informada"})
+                return
+            result = await verify_2fa(session_id, tenant_id, password)
 
-    else:
-        log.info("Ação: start (nova sessão)")
-        result = await start_session(session_id, tenant_id, phone, api_id, api_hash)
-
-    elapsed = (time.perf_counter() - start_time) * 1000
-    log.info(f"Resultado: {result} | elapsed={elapsed:.0f}ms")
-
-    if flow_id:
-        new_status = result.get("status", "error")
-        if new_status == "error":
-            await update_flow_status(flow_id, "error", {
-                "errorMessage": result.get("error", "Erro ao processar sessão")
-            })
         else:
-            await update_flow_status(flow_id, new_status)
+            result = await start_session(session_id, tenant_id, phone, api_id, api_hash)
+
+        elapsed = (time.perf_counter() - start_time) * 1000
+        log.info(f"Resultado: {result} | elapsed={elapsed:.0f}ms")
+
+        if flow_id:
+            new_status = result.get("status", "error")
+            if new_status == "error":
+                await update_flow_status(flow_id, "error", {
+                    "errorMessage": result.get("error", "Erro ao processar sessão")
+                })
+            else:
+                await update_flow_status(flow_id, new_status)
+
+    except Exception as e:
+        elapsed = (time.perf_counter() - start_time) * 1000
+        log.error(f"Exceção no handle_start_session | {type(e).__name__}: {e} | elapsed={elapsed:.0f}ms")
+        if flow_id:
+            await update_flow_status(flow_id, "error", {
+                "errorMessage": f"Erro interno: {str(e)}"
+            })
 
 
 async def handle_init(data: dict):
@@ -175,10 +228,8 @@ async def handle_verify(data: dict):
         return
 
     if password_2fa:
-        log.info("Ação: verify com 2FA")
         result = await verify_2fa(session_id, tenant_id, password_2fa)
     else:
-        log.info(f"Ação: verify código | code_length={len(code)}")
         result = await verify_code(
             session_id, tenant_id, creds["phone"], code,
             creds["api_id"], creds["api_hash_encrypted"]
@@ -196,7 +247,6 @@ async def process_pending_tasks():
 
         if count == 0:
             log.info("Fila vazia — nenhuma task pendente")
-            await r.aclose()
             return
 
         log.info(f"Tasks pendentes na fila: {count}")
@@ -221,7 +271,6 @@ async def process_pending_tasks():
                 log.error(f"Erro ao processar task pendente: {type(e).__name__}: {e}")
                 errors += 1
 
-        await r.aclose()
         log.info(f"Fila processada | sucesso={processed} | erros={errors}")
 
     except Exception as e:
@@ -239,7 +288,7 @@ async def queue_consumer():
             result = await r.brpop(QUEUE_NAME, timeout=5)
 
             if result is None:
-                consecutive_errors = 0  # Reset — conexão está OK
+                consecutive_errors = 0
                 continue
 
             _, raw = result
@@ -247,7 +296,8 @@ async def queue_consumer():
 
             try:
                 data = json.loads(raw)
-                await dispatch_task(data)
+                # Processar em task separada para não bloquear o consumer
+                asyncio.create_task(_safe_dispatch(data))
             except json.JSONDecodeError:
                 log.error(f"JSON inválido: {raw[:100]}")
 
@@ -272,14 +322,22 @@ async def queue_consumer():
             await asyncio.sleep(1)
 
 
+async def _safe_dispatch(data: dict):
+    """Wrapper para dispatch_task com tratamento de exceção."""
+    try:
+        await dispatch_task(data)
+    except Exception as e:
+        log.error(f"Erro não tratado no dispatch | {type(e).__name__}: {e}", exc_info=True)
+
+
 async def diagnostics_logger():
-    """Loga diagnósticos periódicos (a cada 5 min) — apenas em dev."""
+    """Loga diagnósticos periódicos (a cada 5 min)."""
     if os.getenv("NODE_ENV") == "production":
         return
 
     log.debug("Diagnostics logger ativo (intervalo: 5min)")
     while not _shutdown_event.is_set():
-        await asyncio.sleep(300)  # 5 minutos
+        await asyncio.sleep(300)
 
         sessions = get_active_sessions_info()
         log.info(f"─── DIAGNÓSTICO | sessões ativas: {len(sessions)} ───")
@@ -302,6 +360,7 @@ async def graceful_shutdown():
         except Exception as e:
             log.error(f"Erro ao desconectar {session_id[:8]}...: {e}")
 
+    await close_redis()
     log.info("Todas as sessões desconectadas. Bye!")
 
 
@@ -310,20 +369,15 @@ async def main():
     log.info(f"PID: {os.getpid()}")
     log.info(f"Redis: {REDIS_URL}")
     log.info(f"Env: {os.getenv('NODE_ENV', 'development')}")
-    log.info(f"Log level: {os.getenv('LOG_LEVEL', 'DEBUG')}")
-    log.info(f"Log file: logs/worker_*.log")
     log.info(f"Platform: {sys.platform}")
 
-    # Signal handlers para shutdown graceful (não suportado no Windows)
     if sys.platform != "win32":
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, lambda: _shutdown_event.set())
         log.info("Signal handlers registrados (SIGINT, SIGTERM)")
-    else:
-        log.info("Windows detectado — shutdown via Ctrl+C (KeyboardInterrupt)")
 
-    # 0. Executar migrations pendentes (antes de qualquer operação no banco)
+    # 0. Migrations
     from database import run_migrations_on_startup
     try:
         run_migrations_on_startup()
@@ -331,27 +385,31 @@ async def main():
         log.error(f"Abortando: {e}")
         sys.exit(1)
 
-    # 1. Restaurar sessões ativas do banco
-    await restore_active_sessions()
+    # 1. Iniciar consumer ANTES da restauração (para não perder tasks novas)
+    consumer_task = asyncio.create_task(queue_consumer())
+    log.info("Consumer de fila iniciado (background)")
 
-    # 2. Processar tasks pendentes na fila
+    # 2. Processar tasks pendentes na fila (que chegaram enquanto worker estava offline)
     await process_pending_tasks()
 
-    # 3. Iniciar tasks concorrentes
+    # 3. Restaurar sessões ativas do banco (em background, sem bloquear)
+    restore_task = asyncio.create_task(_safe_restore())
+
+    # 4. Iniciar tasks auxiliares
     log_separator(log, "AGUARDANDO TASKS")
     tasks = [
-        asyncio.create_task(queue_consumer()),
+        consumer_task,
+        restore_task,
         asyncio.create_task(diagnostics_logger()),
+        asyncio.create_task(auto_reconnect_loop()),
     ]
 
-    # Esperar shutdown
     try:
         await _shutdown_event.wait()
     except asyncio.CancelledError:
         pass
     log.info("Shutdown signal recebido...")
 
-    # Cancelar tasks
     for t in tasks:
         t.cancel()
 
@@ -359,13 +417,17 @@ async def main():
     await graceful_shutdown()
 
 
+async def _safe_restore():
+    """Wrapper para restore_active_sessions com tratamento de exceção."""
+    try:
+        await restore_active_sessions()
+    except Exception as e:
+        log.error(f"Erro na restauração de sessões | {type(e).__name__}: {e}", exc_info=True)
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         log.info("Worker encerrado (Ctrl+C)")
-        # No Windows, fazer cleanup síncrono
-        from session_manager import active_clients
-        if active_clients:
-            log.info(f"Desconectando {len(active_clients)} sessões...")
         sys.exit(0)

@@ -25,6 +25,8 @@ const STEP_TITLES: Record<OnboardingStep, string> = {
   session_2fa: 'Verificação em duas etapas',
   configure_ai: 'Configurar assistente IA',
   active: 'Assistente ativo',
+  reconnecting: 'Reconectando...',
+  disconnected: 'Sessão desconectada',
 };
 
 export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onFlowCreated }: Props) {
@@ -52,8 +54,11 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
     try {
       const res = await verifySessionCode(flowId, code);
       if (res.success) {
-        onStepChange(res.data?.status === 'awaiting_2fa' ? 'session_2fa' : 'configure_ai');
-      } else { setSessionError(res.error || 'Código inválido.'); }
+        // O worker vai processar — voltar para capturing para fazer polling
+        onStepChange('capturing');
+      } else {
+        setSessionError(res.error || 'Código inválido.');
+      }
     } catch { setSessionError('Erro de conexão.'); }
     finally { setSessionLoading(false); }
   }
@@ -64,10 +69,25 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
     setSessionLoading(true);
     try {
       const res = await verifySessionCode(flowId, '', password);
-      if (res.success) onStepChange('configure_ai');
-      else setSessionError(res.error || 'Senha incorreta.');
+      if (res.success) {
+        // O worker vai processar — voltar para capturing para fazer polling
+        onStepChange('capturing');
+      } else {
+        setSessionError(res.error || 'Senha incorreta.');
+      }
     } catch { setSessionError('Erro de conexão.'); }
     finally { setSessionLoading(false); }
+  }
+
+  function handleCapturingComplete(status: string) {
+    if (status === 'active') {
+      // Sessão restaurada automaticamente sem código
+      onStepChange('configure_ai');
+    } else if (status === 'awaiting_2fa') {
+      onStepChange('session_2fa');
+    } else {
+      onStepChange('session_code');
+    }
   }
 
   return (
@@ -95,8 +115,12 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
         </>
       )}
 
-      {currentStep === 'capturing' && flowId && (
-        <CapturingScreen flowId={flowId} onComplete={() => onStepChange('session_code')} onError={(msg) => { setPortalError(msg); onStepChange('phone'); }} />
+      {(currentStep === 'capturing' || currentStep === 'reconnecting') && flowId && (
+        <CapturingScreen
+          flowId={flowId}
+          onComplete={handleCapturingComplete}
+          onError={(msg) => { setPortalError(msg); onStepChange('phone'); }}
+        />
       )}
 
       {currentStep === 'session_code' && (

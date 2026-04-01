@@ -19,7 +19,6 @@ export async function POST(req: NextRequest) {
     });
 
     if (!flowId) {
-      log.warn(`[${reqId}] flowId ausente`);
       return NextResponse.json(
         { success: false, error: 'flowId obrigatório' },
         { status: 400 }
@@ -27,7 +26,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (!code && !password2fa) {
-      log.warn(`[${reqId}] Nem código nem senha 2FA informados`);
       return NextResponse.json(
         { success: false, error: 'Informe o código ou a senha 2FA' },
         { status: 400 }
@@ -36,7 +34,6 @@ export async function POST(req: NextRequest) {
 
     const flow = await getFlowState(flowId);
     if (!flow) {
-      log.warn(`[${reqId}] Flow expirado`, { flowId });
       return NextResponse.json(
         { success: false, error: 'Sessão expirada. Inicie novamente.' },
         { status: 404 }
@@ -46,10 +43,8 @@ export async function POST(req: NextRequest) {
     log.info(`[${reqId}] Flow recuperado`, {
       sessionId: flow.sessionId,
       currentStep: flow.step,
-      hasApiId: !!flow.apiId,
     });
 
-    // Renovar TTL — cliente ainda está ativa
     await touchFlowState(flowId);
 
     const action = password2fa ? 'verify_2fa' : 'verify_code';
@@ -65,23 +60,19 @@ export async function POST(req: NextRequest) {
       password2fa: password2fa || null,
     };
 
-    log.info(`[${reqId}] Publicando para worker`, { action, channel: CHANNELS.TELEGRAM_START_SESSION });
+    log.info(`[${reqId}] Publicando para worker`, { action });
     await publishToWorker(CHANNELS.TELEGRAM_START_SESSION, workerPayload);
 
-    const newStatus = password2fa ? 'active' : 'awaiting_session_code';
-    log.transition(flow.sessionId, flow.step, newStatus);
+    // NÃO mudar o status no banco aqui — o worker vai mudar quando processar
+    // Apenas atualizar o flow step para indicar que estamos aguardando
+    const pendingStep = password2fa ? 'verifying_2fa' : 'verifying_code';
+    await setFlowState(flowId, { ...flow, step: pendingStep });
 
-    await setFlowState(flowId, { ...flow, step: newStatus });
-    await db.query(
-      `UPDATE telegram_sessions SET status = $1, updated_at = NOW() WHERE id = $2`,
-      [newStatus, flow.sessionId]
-    );
-
-    log.info(`[${reqId}] ✓ verify-session concluído`, { newStatus });
+    log.info(`[${reqId}] ✓ verify-session publicado — aguardando worker`);
 
     return NextResponse.json({
       success: true,
-      data: { status: newStatus },
+      data: { status: pendingStep },
     });
   } catch (error) {
     log.error(`[${reqId}] Exceção não tratada`, error);

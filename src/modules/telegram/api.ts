@@ -37,7 +37,12 @@ export function verifySessionCode(flowId: string, code: string, password2fa?: st
 
 /** Consulta status atual */
 export function getStatus(tenantId: string) {
-  return request<TelegramSession & { status: string; flowId?: string }>(`/status?tenantId=${tenantId}`);
+  return request<TelegramSession & { status: string; flowId?: string; hasSession?: boolean }>(`/status?tenantId=${tenantId}`);
+}
+
+/** Consulta status por flowId (polling durante onboarding) */
+export function getFlowStatus(flowId: string) {
+  return request<{ status: string; flowId: string; sessionId: string; errorMessage?: string }>(`/status?flowId=${flowId}`);
 }
 
 /** Consulta status por sessão (usado pelo hook de polling) */
@@ -48,6 +53,22 @@ export function getSessionStatus(tenantId: string) {
 /** Lista contatos capturados */
 export function getContacts(tenantId: string) {
   return request<{ contacts: IContact[]; total: number }>(`/contacts?tenantId=${tenantId}`);
+}
+
+/** Reconectar sessão existente (sem pedir código) */
+export function reconnectSession(tenantId: string) {
+  return request<{ flowId?: string; status: string; message?: string }>('/reconnect', {
+    method: 'POST',
+    body: JSON.stringify({ tenantId }),
+  });
+}
+
+/** Desconectar sessão (preserva session_string para reconexão futura) */
+export function disconnectSession(tenantId: string) {
+  return request<{ status: string }>('/disconnect', {
+    method: 'POST',
+    body: JSON.stringify({ tenantId }),
+  });
 }
 
 /** Inicia sessão com credenciais manuais (fluxo antigo) */

@@ -17,9 +17,7 @@ export function VerifyCodeForm({ sessionId, needs2fa, onSuccess, onNeed2fa }: Pr
   const [error, setError] = useState('');
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  useEffect(() => {
-    inputRefs.current[0]?.focus();
-  }, []);
+  useEffect(() => { inputRefs.current[0]?.focus(); }, []);
 
   function handleCodeChange(index: number, value: string) {
     if (value.length > 1) value = value.slice(-1);
@@ -85,7 +83,7 @@ export function VerifyCodeForm({ sessionId, needs2fa, onSuccess, onNeed2fa }: Pr
           </div>
         )}
         {error && <p style={styles.error}>{error}</p>}
-        <button type="submit" disabled={loading} style={{ ...styles.button, opacity: loading ? 0.6 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}>
+        <button type="submit" disabled={loading} style={{ ...styles.button, opacity: loading ? 0.6 : 1 }}>
           {loading ? 'Verificando...' : 'Verificar'}
         </button>
       </form>

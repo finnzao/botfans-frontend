@@ -18,28 +18,34 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ success: true, data: { status: 'expired' } });
       }
 
-      // Renovar TTL — frontend está fazendo polling, sessão está ativa
       await touchFlowState(flowId);
 
+      // Sempre consultar o banco para pegar o status mais recente
+      // (worker pode ter atualizado diretamente)
       const result = await db.query(
-        `SELECT status FROM telegram_sessions WHERE id = $1`, [flow.sessionId]
+        `SELECT status, error_message FROM telegram_sessions WHERE id = $1`, [flow.sessionId]
       );
       const dbStatus = result.rows[0]?.status || flow.step;
+      const errorMessage = result.rows[0]?.error_message || flow.errorMessage || null;
+
+      // Usar o status mais "avançado" entre flow e banco
+      const effectiveStatus = resolveStatus(flow.step, dbStatus);
 
       log.debug(`Status consultado via flowId`, {
         flowId: flowId.slice(0, 8) + '...',
         sessionId: flow.sessionId?.slice(0, 8) + '...',
         flowStep: flow.step,
         dbStatus,
+        effectiveStatus,
       });
 
       return NextResponse.json({
         success: true,
         data: {
-          status: dbStatus,
+          status: effectiveStatus,
           flowId,
           sessionId: flow.sessionId,
-          errorMessage: flow.errorMessage || null,
+          errorMessage: effectiveStatus === 'error' ? errorMessage : null,
         },
       });
     }
@@ -47,21 +53,22 @@ export async function GET(req: NextRequest) {
     // ─── Consulta por tenantId (carregamento da página) ───
     if (tenantId) {
       const result = await db.query(
-        `SELECT id, tenant_id, phone, status, created_at, updated_at
+        `SELECT id, tenant_id, phone, status, session_string IS NOT NULL AND length(session_string) > 10 as has_session,
+                created_at, updated_at
          FROM telegram_sessions WHERE tenant_id = $1`,
         [tenantId]
       );
 
       if (result.rows.length === 0) {
-        log.debug(`Nenhuma sessão para tenant`, { tenantId });
         return NextResponse.json({ success: true, data: { status: 'not_configured' } });
       }
 
       const row = result.rows[0];
+
       log.debug(`Sessão encontrada via tenantId`, {
         sessionId: row.id?.slice(0, 8) + '...',
         status: row.status,
-        updatedAt: row.updated_at,
+        hasSession: row.has_session,
       });
 
       return NextResponse.json({
@@ -72,13 +79,13 @@ export async function GET(req: NextRequest) {
           channel: 'telegram',
           status: row.status,
           phone: row.phone,
+          hasSession: row.has_session,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
         },
       });
     }
 
-    log.warn('Request sem tenantId nem flowId');
     return NextResponse.json(
       { success: false, error: 'Informe tenantId ou flowId' },
       { status: 400 }
@@ -87,4 +94,36 @@ export async function GET(req: NextRequest) {
     log.error('Exceção ao consultar status', error);
     return NextResponse.json({ success: false, error: 'Erro interno' }, { status: 500 });
   }
+}
+
+/**
+ * Resolve conflito entre flow step e db status.
+ * O status mais "avançado" vence, pois o worker pode ter atualizado
+ * o banco diretamente sem passar pelo flow.
+ */
+function resolveStatus(flowStep: string, dbStatus: string): string {
+  const priority: Record<string, number> = {
+    'idle': 0,
+    'awaiting_portal_code': 1,
+    'portal_authenticated': 2,
+    'capturing_api': 3,
+    'api_captured': 4,
+    'verifying_code': 5,
+    'verifying_2fa': 5,
+    'awaiting_session_code': 6,
+    'awaiting_2fa': 7,
+    'active': 10,
+    'disconnected': -1,
+    'error': -2,
+    'expired': -3,
+  };
+
+  const flowPriority = priority[flowStep] ?? 0;
+  const dbPriority = priority[dbStatus] ?? 0;
+
+  // Se algum deles é "error", propagar o erro
+  if (dbStatus === 'error') return 'error';
+
+  // Retornar o mais avançado
+  return dbPriority >= flowPriority ? dbStatus : flowStep;
 }

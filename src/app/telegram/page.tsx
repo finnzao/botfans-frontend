@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { TelegramSetup } from '@/modules/telegram/components/TelegramSetup';
 import { ContactsList } from '@/modules/telegram/components/ContactsList';
-import { getStatus } from '@/modules/telegram/api';
+import { getStatus, disconnectSession, reconnectSession } from '@/modules/telegram/api';
 import { statusToStep } from '@/modules/telegram/types';
 import type { OnboardingStep } from '@/modules/telegram/types';
 
@@ -13,6 +13,8 @@ export default function TelegramPage() {
   const [step, setStep] = useState<OnboardingStep>('phone');
   const [flowId, setFlowId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hasSession, setHasSession] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
 
   useEffect(() => {
     checkExisting();
@@ -23,13 +25,21 @@ export default function TelegramPage() {
       const res = await getStatus(TEST_TENANT_ID);
       if (res.success && res.data) {
         const mapped = statusToStep(res.data.status);
+        setHasSession(!!res.data.hasSession);
 
-        // Se o status é intermediário (precisa de flowId) mas não temos flowId,
-        // significa que o flow do Redis expirou. Volta para o início.
-        const needsFlow: OnboardingStep[] = ['portal_code', 'capturing', 'session_code', 'session_2fa'];
+        // Se status é intermediário sem flowId, verificar se pode reconectar
+        const needsFlow: OnboardingStep[] = ['portal_code', 'capturing', 'session_code', 'session_2fa', 'reconnecting'];
         if (needsFlow.includes(mapped) && !res.data.flowId) {
-          console.log(`[TelegramPage] Status "${res.data.status}" sem flowId — reiniciando do phone`);
-          setStep('phone');
+          console.log(`[TelegramPage] Status "${res.data.status}" sem flowId`);
+          // Se tem session_string, mostrar como desconectado (pode reconectar)
+          if (res.data.hasSession) {
+            setStep('disconnected');
+          } else {
+            setStep('phone');
+          }
+        } else if (mapped === 'disconnected' && res.data.hasSession) {
+          // Desconectado mas com sessão salva — pode reconectar
+          setStep('disconnected');
         } else {
           setStep(mapped);
           if (res.data.flowId) setFlowId(res.data.flowId);
@@ -42,7 +52,45 @@ export default function TelegramPage() {
     }
   }
 
-  function handleDisconnect() {
+  async function handleDisconnect() {
+    try {
+      const res = await disconnectSession(TEST_TENANT_ID);
+      if (res.success) {
+        setStep('disconnected');
+        setFlowId(null);
+        setHasSession(true); // session_string é preservada
+      }
+    } catch (e) {
+      console.error('Erro ao desconectar:', e);
+    }
+  }
+
+  async function handleReconnect() {
+    setReconnecting(true);
+    try {
+      const res = await reconnectSession(TEST_TENANT_ID);
+      if (res.success) {
+        if (res.data?.status === 'active') {
+          // Já estava ativa
+          setStep('active');
+        } else if (res.data?.flowId) {
+          setFlowId(res.data.flowId);
+          setStep('capturing');
+        }
+      } else {
+        alert(res.error || 'Erro ao reconectar');
+        // Se falhou, voltar para o início
+        setStep('phone');
+        setHasSession(false);
+      }
+    } catch (e) {
+      console.error('Erro ao reconectar:', e);
+    } finally {
+      setReconnecting(false);
+    }
+  }
+
+  function handleNewSetup() {
     setStep('phone');
     setFlowId(null);
   }
@@ -107,7 +155,9 @@ export default function TelegramPage() {
             <p style={styles.subtitle}>
               {step === 'active'
                 ? 'Seu assistente está ativo e respondendo mensagens'
-                : 'Conecte seu Telegram para ativar o assistente com IA'
+                : step === 'disconnected'
+                  ? 'Sua sessão está desconectada — reconecte para voltar a responder'
+                  : 'Conecte seu Telegram para ativar o assistente com IA'
               }
             </p>
           </div>
@@ -129,6 +179,35 @@ export default function TelegramPage() {
                 </div>
               </div>
               <ContactsList tenantId={TEST_TENANT_ID} />
+            </div>
+          ) : step === 'disconnected' ? (
+            <div style={styles.setupCard}>
+              <div style={styles.disconnectedCard}>
+                <div style={styles.disconnectedDot} />
+                <div style={{ flex: 1 }}>
+                  <p style={styles.disconnectedTitle}>Sessão desconectada</p>
+                  <p style={styles.disconnectedDesc}>
+                    Sua sessão foi salva. Você pode reconectar sem precisar digitar códigos novamente.
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
+                <button
+                  onClick={handleReconnect}
+                  disabled={reconnecting}
+                  style={{
+                    ...styles.reconnectBtn,
+                    opacity: reconnecting ? 0.6 : 1,
+                    cursor: reconnecting ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {reconnecting ? 'Reconectando...' : 'Reconectar sessão'}
+                </button>
+                <button onClick={handleNewSetup} style={styles.newSetupBtn}>
+                  Configurar do zero
+                </button>
+              </div>
             </div>
           ) : (
             <div style={styles.setupCard}>
@@ -210,6 +289,24 @@ const styles: Record<string, React.CSSProperties> = {
   },
   statusTitle: { fontSize: 14, fontWeight: 600, color: '#085041', margin: '0 0 2px' },
   statusDesc: { fontSize: 12, color: '#0F6E56', margin: 0 },
+  disconnectedCard: {
+    display: 'flex', alignItems: 'center', gap: 14, padding: '16px 20px',
+    background: '#FAEEDA', borderRadius: 12, border: '1px solid #FAC775',
+  },
+  disconnectedDot: {
+    width: 10, height: 10, borderRadius: '50%', background: '#B87A00', flexShrink: 0,
+    boxShadow: '0 0 0 3px rgba(184, 122, 0, 0.2)',
+  },
+  disconnectedTitle: { fontSize: 14, fontWeight: 600, color: '#633806', margin: '0 0 2px' },
+  disconnectedDesc: { fontSize: 12, color: '#8B6914', margin: 0, lineHeight: 1.5 },
+  reconnectBtn: {
+    padding: '12px 24px', fontSize: 14, fontWeight: 600, background: '#185FA5',
+    color: '#fff', border: 'none', borderRadius: 8, flex: 1,
+  },
+  newSetupBtn: {
+    padding: '12px 24px', fontSize: 14, fontWeight: 500, background: '#fff',
+    color: '#666', border: '1px solid #ddd', borderRadius: 8,
+  },
   loadingPage: {
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     justifyContent: 'center', minHeight: '100vh',

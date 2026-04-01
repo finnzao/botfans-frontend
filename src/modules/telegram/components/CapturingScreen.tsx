@@ -1,15 +1,16 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { getFlowStatus } from '../api';
 
 interface Props {
-  onComplete: () => void;
+  onComplete: (status: string) => void;
   onError: (msg: string) => void;
   flowId: string;
 }
 
 const POLL_INTERVAL = 2000;
-const WORKER_TIMEOUT = 60000;
+const WORKER_TIMEOUT = 90000; // Increased from 60s to 90s
 
 export function CapturingScreen({ onComplete, onError, flowId }: Props) {
   const polling = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -43,7 +44,11 @@ export function CapturingScreen({ onComplete, onError, flowId }: Props) {
 
           if (st === 'awaiting_session_code' || st === 'awaiting_2fa') {
             stop();
-            onComplete();
+            onComplete(st);
+          } else if (st === 'active') {
+            // Sessão restaurada com sucesso (session_string válida, sem pedir código)
+            stop();
+            onComplete('active');
           } else if (st === 'error') {
             stop();
             onError(data.data.errorMessage || 'Erro ao configurar. Tente novamente.');
@@ -62,30 +67,42 @@ export function CapturingScreen({ onComplete, onError, flowId }: Props) {
     if (polling.current) { clearInterval(polling.current); polling.current = null; }
   }
 
-  const waiting = currentStatus === 'api_captured' || currentStatus === 'capturing_api';
+  const waiting = ['api_captured', 'capturing_api', 'reconnecting'].includes(currentStatus);
 
   return (
     <div style={styles.container}>
       <div style={styles.spinner} />
-      <p style={styles.title}>Configurando sua integração...</p>
+      <p style={styles.title}>
+        {currentStatus === 'reconnecting'
+          ? 'Reconectando sua sessão...'
+          : 'Configurando sua integração...'
+        }
+      </p>
       <p style={styles.desc}>
-        {waiting
-          ? 'Credenciais capturadas! Aguardando o assistente iniciar a conexão...'
-          : 'Conectando ao Telegram automaticamente.'
+        {currentStatus === 'reconnecting'
+          ? 'Restaurando conexão usando sessão salva — não será necessário novo código.'
+          : waiting
+            ? 'Credenciais capturadas! Aguardando o assistente iniciar a conexão...'
+            : 'Conectando ao Telegram automaticamente.'
         }
       </p>
 
       <div style={styles.steps}>
         <StepLine label="Autenticando no portal Telegram" done />
-        <StepLine label="Capturando credenciais da API" done={currentStatus !== 'capturing_api'} active={currentStatus === 'capturing_api'} />
+        <StepLine
+          label="Capturando credenciais da API"
+          done={currentStatus !== 'capturing_api'}
+          active={currentStatus === 'capturing_api'}
+        />
         <StepLine
           label="Conectando assistente ao Telegram"
           active={waiting && currentStatus !== 'capturing_api'}
+          done={currentStatus === 'awaiting_session_code' || currentStatus === 'active'}
           detail={waiting ? `Aguardando worker... (${elapsed}s)` : undefined}
         />
       </div>
 
-      {elapsed > 15 && waiting && (
+      {elapsed > 20 && waiting && (
         <div style={styles.warningBox}>
           <p style={styles.warningText}>⚠ O worker está demorando. Verifique se está rodando:</p>
           <code style={styles.codeBlock}>cd src/worker && python main.py</code>

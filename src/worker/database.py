@@ -153,7 +153,8 @@ def get_active_sessions() -> list[dict]:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
             "SELECT id, tenant_id, phone, api_id, api_hash_encrypted, session_string "
-            "FROM telegram_sessions WHERE status = 'active'"
+            "FROM telegram_sessions WHERE status IN ('active', 'reconnecting') "
+            "AND session_string IS NOT NULL AND length(session_string) > 10"
         )
         sessions = cur.fetchall()
         cur.close()

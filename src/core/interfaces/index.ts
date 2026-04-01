@@ -10,6 +10,7 @@ export type SessionStatus =
   | 'awaiting_2fa'
   | 'active'
   | 'disconnected'
+  | 'reconnecting'
   | 'error';
 
 export interface IChannelSession {

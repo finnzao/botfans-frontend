@@ -9,6 +9,6 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Sessions (legacy file-based — não mais usadas)
+# Sessions (legacy file-based)
 sessions/
 *.session

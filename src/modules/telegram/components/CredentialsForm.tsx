@@ -19,7 +19,6 @@ export function CredentialsForm({ tenantId, onSuccess }: Props) {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
       const res = await initSession({ phone, apiId, apiHash, tenantId });
       if (res.success && res.data?.id) {
@@ -45,7 +44,6 @@ export function CredentialsForm({ tenantId, onSuccess }: Props) {
           <li>Copie o <strong>App api_id</strong> e <strong>App api_hash</strong></li>
         </ol>
       </div>
-
       <form onSubmit={handleSubmit} style={styles.form}>
         <div style={styles.field}>
           <label style={styles.label}>Número do Telegram</label>
@@ -61,7 +59,7 @@ export function CredentialsForm({ tenantId, onSuccess }: Props) {
           <input type="text" placeholder="a1b2c3d4e5f6..." value={apiHash} onChange={e => setApiHash(e.target.value)} required style={styles.input} />
         </div>
         {error && <p style={styles.error}>{error}</p>}
-        <button type="submit" disabled={loading} style={{ ...styles.button, opacity: loading ? 0.6 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}>
+        <button type="submit" disabled={loading} style={{ ...styles.button, opacity: loading ? 0.6 : 1 }}>
           {loading ? 'Conectando...' : 'Iniciar conexão'}
         </button>
       </form>

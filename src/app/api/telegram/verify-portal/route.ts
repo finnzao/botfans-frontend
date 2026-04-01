@@ -171,13 +171,13 @@ export async function POST(req: NextRequest) {
     );
     log.transition(flow.sessionId, 'capturing_api', 'api_captured');
 
-    // 5. Publicar para worker (fila + pubsub)
+    // 5. Publicar para worker
     await publishToWorker(CHANNELS.TELEGRAM_START_SESSION, {
       flowId, sessionId: flow.sessionId, tenantId: flow.tenantId,
       phone: flow.phone, apiId: parseInt(apiId), apiHash,
     });
 
-    // 6. Manter api_captured — worker muda para awaiting_session_code
+    // 6. Manter api_captured — worker muda para awaiting_session_code ou active
     await setFlowState(flowId, { ...flow, apiId: parseInt(apiId), apiHash, step: 'api_captured' });
 
     log.info(`[${reqId}] ✓ verify-portal concluído — aguardando worker`);

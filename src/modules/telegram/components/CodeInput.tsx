@@ -13,7 +13,6 @@ interface Props {
   loading?: boolean;
   error?: string;
   onSubmit: (code: string) => void;
-  /** Se true, mostra campo de senha ao invés do campo de código */
   passwordMode?: boolean;
   passwordLabel?: string;
 }

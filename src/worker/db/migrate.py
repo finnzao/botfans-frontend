@@ -1,20 +1,5 @@
 """
 Migration Runner — executa migrations pendentes automaticamente.
-
-Como funciona:
-  1. Na primeira execução, cria a tabela _migrations no banco
-  2. Lê todos os arquivos .sql em migrations/ (ordenados por nome)
-  3. Compara com o que já foi executado (registrado em _migrations)
-  4. Executa os pendentes em ordem, dentro de transação
-  5. Registra cada migration executada
-
-Convenção de nomes:
-  migrations/
-    001_initial_schema.sql
-    002_add_session_string.sql
-    003_add_error_message.sql
-
-O número no início define a ORDEM de execução.
 """
 
 import os
@@ -25,10 +10,8 @@ from logger import get_logger
 
 log = get_logger("migrations")
 
-# Sobe um nível: db/migrate.py → db/ → worker/ → worker/migrations/
 MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "migrations")
 
-# SQL para criar a tabela de controle de migrations
 MIGRATIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS _migrations (
     id          SERIAL PRIMARY KEY,
@@ -41,7 +24,6 @@ CREATE TABLE IF NOT EXISTS _migrations (
 
 
 def get_migration_files() -> list[dict]:
-    """Lista todos os arquivos .sql em migrations/, ordenados por nome."""
     migrations_path = Path(MIGRATIONS_DIR)
     if not migrations_path.exists():
         log.warning(f"Diretório de migrations não existe: {MIGRATIONS_DIR}")
@@ -65,7 +47,6 @@ def get_migration_files() -> list[dict]:
 
 
 def get_executed_migrations(conn) -> dict[str, str]:
-    """Retorna dict {nome: checksum} das migrations já executadas."""
     cur = conn.cursor()
     cur.execute("SELECT name, checksum FROM _migrations ORDER BY id")
     rows = cur.fetchall()
@@ -74,28 +55,17 @@ def get_executed_migrations(conn) -> dict[str, str]:
 
 
 def run_migrations(conn) -> dict:
-    """
-    Executa todas as migrations pendentes.
-
-    Args:
-        conn: conexão psycopg2 (sem autocommit — cada migration roda em transação)
-
-    Returns:
-        dict com resultado: {"executed": [...], "skipped": [...], "errors": [...]}
-    """
     log.info("=" * 50)
     log.info("  MIGRATION RUNNER")
     log.info("=" * 50)
 
     result = {"executed": [], "skipped": [], "errors": []}
 
-    # 1. Garantir que tabela de controle existe
     cur = conn.cursor()
     cur.execute(MIGRATIONS_TABLE_SQL)
     conn.commit()
     cur.close()
 
-    # 2. Listar migrations no disco
     migration_files = get_migration_files()
     if not migration_files:
         log.info("Nenhuma migration encontrada no disco")
@@ -103,29 +73,22 @@ def run_migrations(conn) -> dict:
 
     log.info(f"Migrations no disco: {len(migration_files)}")
 
-    # 3. Listar migrations já executadas
     executed = get_executed_migrations(conn)
     log.info(f"Migrations já executadas: {len(executed)}")
 
-    # 4. Executar pendentes
     for mig in migration_files:
         name = mig["name"]
         checksum = mig["checksum"]
 
         if name in executed:
-            # Verificar se o conteúdo mudou
             if executed[name] != checksum:
-                log.warning(
-                    f"⚠ Migration '{name}' foi modificada após execução! "
-                    f"checksum banco={executed[name]} | disco={checksum}"
-                )
+                log.warning(f"⚠ Migration '{name}' foi modificada após execução!")
                 result["skipped"].append({"name": name, "reason": "already_executed_but_modified"})
             else:
                 log.debug(f"  ✓ {name} — já executada")
                 result["skipped"].append({"name": name, "reason": "already_executed"})
             continue
 
-        # Executar migration
         log.info(f"  ▶ Executando: {name} (checksum={checksum})")
         start = time.perf_counter()
 
@@ -135,7 +98,6 @@ def run_migrations(conn) -> dict:
 
             duration_ms = int((time.perf_counter() - start) * 1000)
 
-            # Registrar na tabela de controle
             cur.execute(
                 "INSERT INTO _migrations (name, checksum, duration_ms) VALUES (%s, %s, %s)",
                 (name, checksum, duration_ms),
@@ -150,10 +112,8 @@ def run_migrations(conn) -> dict:
             conn.rollback()
             log.error(f"  ✗ {name} — FALHOU: {e}")
             result["errors"].append({"name": name, "error": str(e)})
-            # Parar na primeira falha (migrations devem ser sequenciais)
             break
 
-    # Resumo
     log.info(
         f"Migration concluída | executadas={len(result['executed'])} | "
         f"puladas={len(result['skipped'])} | erros={len(result['errors'])}"
@@ -163,17 +123,6 @@ def run_migrations(conn) -> dict:
 
 
 def generate_migration_file(name: str, sql: str) -> str:
-    """
-    Gera um novo arquivo de migration no diretório migrations/.
-
-    Args:
-        name: nome descritivo (ex: "add_user_email")
-        sql: conteúdo SQL da migration
-
-    Returns:
-        caminho do arquivo criado
-    """
-    # Descobrir próximo número
     existing = sorted(Path(MIGRATIONS_DIR).glob("*.sql")) if Path(MIGRATIONS_DIR).exists() else []
     next_num = 1
     if existing:

@@ -14,10 +14,12 @@ const STEP_POSITION: Record<OnboardingStep, number> = {
   phone: 0,
   portal_code: 1,
   capturing: 1,
+  reconnecting: 2,
   session_code: 2,
   session_2fa: 2,
   configure_ai: 3,
   active: 4,
+  disconnected: 4,
 };
 
 interface Props {

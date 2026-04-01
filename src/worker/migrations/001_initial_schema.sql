@@ -3,7 +3,6 @@
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- ── telegram_sessions ──
 CREATE TABLE IF NOT EXISTS telegram_sessions (
     id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id               UUID NOT NULL UNIQUE,
@@ -23,7 +22,6 @@ COMMENT ON COLUMN telegram_sessions.session_string IS 'String da sessão Teletho
 COMMENT ON COLUMN telegram_sessions.session_string_encrypted IS 'Session string criptografada (backup seguro)';
 COMMENT ON COLUMN telegram_sessions.error_message IS 'Última mensagem de erro';
 
--- ── ai_profiles ──
 CREATE TABLE IF NOT EXISTS ai_profiles (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id       UUID NOT NULL UNIQUE,
@@ -39,7 +37,6 @@ CREATE TABLE IF NOT EXISTS ai_profiles (
 COMMENT ON TABLE ai_profiles IS 'Perfis de IA (como o bot responde)';
 COMMENT ON COLUMN ai_profiles.capture_fields IS 'Campos que a IA deve capturar do contato';
 
--- ── contacts ──
 CREATE TABLE IF NOT EXISTS contacts (
     id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id           UUID NOT NULL,
@@ -59,7 +56,6 @@ CREATE TABLE IF NOT EXISTS contacts (
 
 COMMENT ON TABLE contacts IS 'Contatos capturados via Telegram';
 
--- ── messages ──
 CREATE TABLE IF NOT EXISTS messages (
     id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id               UUID NOT NULL,
@@ -78,7 +74,6 @@ COMMENT ON COLUMN messages.telegram_message_id IS 'ID original da mensagem no Te
 COMMENT ON COLUMN messages.media_type IS 'Tipo de mídia: text, photo, video, document, voice, sticker';
 COMMENT ON COLUMN messages.reply_to_message_id IS 'ID da mensagem que esta responde (threading)';
 
--- ── Índices ──
 CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON telegram_sessions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_active ON telegram_sessions(status) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_contacts_tenant ON contacts(tenant_id);

@@ -1,21 +1,10 @@
 """
 Schema do banco de dados definido como código (Source of Truth).
-
-Cada tabela é um dataclass que descreve suas colunas, índices e constraints.
-O migration runner usa este arquivo para gerar DDL automaticamente.
-
-Para adicionar uma nova tabela ou coluna:
-  1. Edite este arquivo
-  2. Crie uma migration em migrations/ (ou use o gerador automático)
-  3. O worker executa migrations pendentes ao iniciar
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
-
-
-# ─── Enums (mapeiam para CHECK constraints) ───
 
 
 class SessionStatus(str, Enum):
@@ -28,6 +17,7 @@ class SessionStatus(str, Enum):
     AWAITING_2FA = "awaiting_2fa"
     ACTIVE = "active"
     DISCONNECTED = "disconnected"
+    RECONNECTING = "reconnecting"
     ERROR = "error"
 
 
@@ -48,28 +38,25 @@ class ToneType(str, Enum):
     DESCONTRAIDO = "descontraido"
 
 
-# ─── Column definition ───
-
-
 @dataclass
 class Column:
     name: str
-    type: str  # SQL type: UUID, VARCHAR(100), TEXT, INTEGER, BIGINT, BOOLEAN, JSONB, TIMESTAMP, etc.
+    type: str
     primary_key: bool = False
     nullable: bool = True
-    default: Optional[str] = None  # SQL default expression: "NOW()", "uuid_generate_v4()", "'idle'", "true", "'{}'::jsonb"
+    default: Optional[str] = None
     unique: bool = False
-    check: Optional[str] = None  # CHECK constraint expression
-    references: Optional[str] = None  # "table_name(column_name)"
+    check: Optional[str] = None
+    references: Optional[str] = None
     comment: Optional[str] = None
 
 
 @dataclass
 class Index:
     name: str
-    columns: list[str]  # Pode incluir expressões: ["tenant_id", "last_contact_at DESC"]
+    columns: list[str]
     unique: bool = False
-    where: Optional[str] = None  # Partial index: "status = 'active'"
+    where: Optional[str] = None
 
 
 @dataclass
@@ -87,13 +74,9 @@ class Table:
     comment: Optional[str] = None
 
 
-# ─── Schema Definition ───
-
-
 EXTENSIONS = ["uuid-ossp"]
 
 TABLES: list[Table] = [
-    # ── telegram_sessions ──
     Table(
         name="telegram_sessions",
         comment="Sessões Telegram (uma por tenant)",
@@ -115,8 +98,6 @@ TABLES: list[Table] = [
             Index("idx_sessions_active", ["status"], where="status = 'active'"),
         ],
     ),
-
-    # ── ai_profiles ──
     Table(
         name="ai_profiles",
         comment="Perfis de IA (como o bot responde)",
@@ -132,8 +113,6 @@ TABLES: list[Table] = [
             Column("updated_at", "TIMESTAMP", default="NOW()"),
         ],
     ),
-
-    # ── contacts ──
     Table(
         name="contacts",
         comment="Contatos capturados via Telegram",
@@ -160,8 +139,6 @@ TABLES: list[Table] = [
             UniqueConstraint("uq_contacts_tenant_user", ["tenant_id", "telegram_user_id"]),
         ],
     ),
-
-    # ── messages ──
     Table(
         name="messages",
         comment="Histórico de mensagens (conversa)",
@@ -187,13 +164,8 @@ TABLES: list[Table] = [
 ]
 
 
-# ─── DDL Generator (usado pelo migration runner e para gerar schema.sql) ───
-
-
 def generate_create_table(table: Table) -> str:
-    """Gera DDL CREATE TABLE IF NOT EXISTS a partir de um Table."""
     lines = []
-
     for col in table.columns:
         parts = [f"    {col.name}", col.type]
         if col.primary_key:
@@ -227,7 +199,6 @@ def generate_create_table(table: Table) -> str:
 
 
 def generate_indexes(table: Table) -> str:
-    """Gera DDL CREATE INDEX IF NOT EXISTS."""
     sqls = []
     for idx in table.indexes:
         unique = "UNIQUE " if idx.unique else ""
@@ -238,11 +209,10 @@ def generate_indexes(table: Table) -> str:
 
 
 def generate_full_schema() -> str:
-    """Gera DDL completo do banco (todas as tabelas + índices)."""
     parts = [
         "-- =============================================",
         "-- BotFans CRM - Schema gerado automaticamente",
-        f"-- Gerado a partir de db/schema.py",
+        "-- Gerado a partir de db/schema.py",
         "-- NÃO EDITE MANUALMENTE — edite db/schema.py",
         "-- =============================================",
         "",
