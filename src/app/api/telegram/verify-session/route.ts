@@ -25,7 +25,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!code && !password2fa) {
+    const trimmedCode = code?.trim() || null;
+    const trimmedPassword = password2fa?.trim() || null;
+
+    if (!trimmedCode && !trimmedPassword) {
       return NextResponse.json(
         { success: false, error: 'Informe o código ou a senha 2FA' },
         { status: 400 }
@@ -47,7 +50,7 @@ export async function POST(req: NextRequest) {
 
     await touchFlowState(flowId);
 
-    const action = password2fa ? 'verify_2fa' : 'verify_code';
+    const action = trimmedPassword ? 'verify_2fa' : 'verify_code';
     const workerPayload = {
       action,
       flowId,
@@ -56,16 +59,14 @@ export async function POST(req: NextRequest) {
       phone: flow.phone,
       apiId: flow.apiId,
       apiHash: flow.apiHash,
-      code: code || null,
-      password2fa: password2fa || null,
+      code: trimmedCode,
+      password2fa: trimmedPassword,
     };
 
     log.info(`[${reqId}] Publicando para worker`, { action });
     await publishToWorker(CHANNELS.TELEGRAM_START_SESSION, workerPayload);
 
-    // NÃO mudar o status no banco aqui — o worker vai mudar quando processar
-    // Apenas atualizar o flow step para indicar que estamos aguardando
-    const pendingStep = password2fa ? 'verifying_2fa' : 'verifying_code';
+    const pendingStep = trimmedPassword ? 'verifying_2fa' : 'verifying_code';
     await setFlowState(flowId, { ...flow, step: pendingStep });
 
     log.info(`[${reqId}] ✓ verify-session publicado — aguardando worker`);

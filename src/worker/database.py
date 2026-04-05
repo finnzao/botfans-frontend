@@ -29,7 +29,6 @@ def get_pool():
 
 
 def get_raw_connection():
-    """Conexão direta (sem pool) — usado pelo migration runner."""
     return psycopg2.connect(DATABASE_URL)
 
 
@@ -48,7 +47,6 @@ def get_connection():
 
 
 def run_migrations_on_startup():
-    """Executa migrations pendentes. Chamado uma vez ao iniciar o worker."""
     from db.migrate import run_migrations
 
     log.info("Verificando migrations pendentes...")
@@ -59,14 +57,14 @@ def run_migrations_on_startup():
         errors = result.get("errors", [])
 
         if executed:
-            log.info(f"✓ {len(executed)} migration(s) executada(s)")
+            log.info(f"{len(executed)} migration(s) executada(s)")
             for m in executed:
-                log.info(f"  → {m['name']} ({m['duration_ms']}ms)")
+                log.info(f"  -> {m['name']} ({m['duration_ms']}ms)")
 
         if errors:
-            log.error(f"✗ {len(errors)} migration(s) falharam!")
+            log.error(f"{len(errors)} migration(s) falharam!")
             for m in errors:
-                log.error(f"  → {m['name']}: {m['error']}")
+                log.error(f"  -> {m['name']}: {m['error']}")
             raise RuntimeError(f"Migration falhou: {errors[0]['name']}")
 
         return result
@@ -90,8 +88,6 @@ def _timed_query(description: str):
         return wrapper
     return decorator
 
-
-# ─── Sessões ───
 
 @_timed_query("get_session_credentials")
 def get_session_credentials(session_id: str) -> dict | None:
@@ -130,7 +126,7 @@ def update_session_status(session_id: str, status: str, error_message: str = Non
         affected = cur.rowcount
         cur.close()
     if affected > 0:
-        log.info(f"Sessão {session_id[:8]}... → {status}" + (f" (erro: {error_message})" if error_message else ""))
+        log.info(f"Sessão {session_id[:8]}... -> {status}" + (f" (erro: {error_message})" if error_message else ""))
     else:
         log.warning(f"update_session_status: nenhuma row afetada para {session_id[:8]}...")
 
@@ -163,8 +159,6 @@ def get_active_sessions() -> list[dict]:
     return result
 
 
-# ─── Contatos ───
-
 @_timed_query("save_contact")
 def save_contact(tenant_id: str, user) -> str | None:
     with get_connection() as conn:
@@ -193,21 +187,22 @@ def save_contact(tenant_id: str, user) -> str | None:
     return None
 
 
-# ─── Mensagens ───
-
 @_timed_query("save_message")
-def save_message(tenant_id: str, contact_id: str, direction: str, content: str, responded_by: str = "ai"):
+def save_message(tenant_id: str, contact_id: str, direction: str, content: str, responded_by: str = "ai", response_time_ms: int = None):
     preview = content[:100] + ("..." if len(content) > 100 else "")
+    word_count = len(content.split()) if content else 0
+
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO messages (tenant_id, contact_id, direction, content, responded_by) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (tenant_id, contact_id, direction, content, responded_by),
+            "INSERT INTO messages (tenant_id, contact_id, direction, content, responded_by, word_count, response_time_ms) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (tenant_id, contact_id, direction, content, responded_by, word_count, response_time_ms),
         )
         msg_id = cur.fetchone()[0]
         cur.close()
-    log.debug(f"{'📩' if direction == 'incoming' else '📤'} Mensagem salva | msg_id={msg_id} | dir={direction} | \"{preview}\"")
+    log.debug(f"{'incoming' if direction == 'incoming' else 'outgoing'} Mensagem salva | msg_id={msg_id} | dir={direction} | words={word_count} | \"{preview}\"")
+    return msg_id
 
 
 @_timed_query("get_conversation_history")
@@ -226,7 +221,22 @@ def get_conversation_history(tenant_id: str, contact_id: str, limit: int = 10) -
     return messages
 
 
-# ─── Perfil IA ───
+@_timed_query("get_last_incoming_timestamp")
+def get_last_incoming_timestamp(tenant_id: str, contact_id: str) -> float | None:
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT EXTRACT(EPOCH FROM created_at) FROM messages "
+            "WHERE tenant_id=%s AND contact_id=%s AND direction='incoming' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (tenant_id, contact_id),
+        )
+        row = cur.fetchone()
+        cur.close()
+    if row:
+        return float(row[0])
+    return None
+
 
 @_timed_query("get_ai_profile")
 def get_ai_profile(tenant_id: str) -> dict | None:

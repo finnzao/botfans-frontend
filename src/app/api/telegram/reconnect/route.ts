@@ -15,7 +15,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'tenantId obrigatório' }, { status: 400 });
     }
 
-    // Buscar sessão existente com session_string
     const result = await db.query(
       `SELECT id, phone, api_id, api_hash_encrypted, status,
               session_string IS NOT NULL AND length(session_string) > 10 as has_session
@@ -44,7 +43,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Criar flow para acompanhar reconexão
+    if (row.status === 'reconnecting') {
+      return NextResponse.json({
+        success: true,
+        data: { status: 'reconnecting', message: 'Reconexão já está em andamento.' },
+      });
+    }
+
     const flowId = randomUUID();
     await setFlowState(flowId, {
       tenantId,
@@ -53,13 +58,11 @@ export async function POST(req: NextRequest) {
       step: 'reconnecting',
     });
 
-    // Atualizar status no banco
     await db.query(
-      `UPDATE telegram_sessions SET status = 'reconnecting', updated_at = NOW() WHERE id = $1`,
+      `UPDATE telegram_sessions SET status = 'reconnecting', error_message = NULL, updated_at = NOW() WHERE id = $1`,
       [row.id]
     );
 
-    // Publicar para worker reconectar
     await publishToWorker(CHANNELS.TELEGRAM_START_SESSION, {
       flowId,
       sessionId: row.id,

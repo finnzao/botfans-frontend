@@ -6,9 +6,9 @@ export async function POST(req: NextRequest) {
   try {
     const { sessionId, code, password2fa } = await req.json();
 
-    if (!sessionId || !code) {
+    if (!sessionId || (!code && !password2fa)) {
       return NextResponse.json(
-        { success: false, error: 'Campos obrigatórios: sessionId, code' },
+        { success: false, error: 'Campos obrigatórios: sessionId, code ou password2fa' },
         { status: 400 }
       );
     }
@@ -21,21 +21,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const pendingStatus = password2fa ? 'verifying_2fa' : 'verifying_code';
+
     await publishToWorker(CHANNELS.TELEGRAM_VERIFY, {
       sessionId,
       tenantId: session.tenantId,
-      code,
+      code: code || null,
       password2fa: password2fa || null,
     });
 
     await db.query(
-      `UPDATE telegram_sessions SET status = 'active', updated_at = NOW() WHERE id = $1`,
-      [sessionId]
+      `UPDATE telegram_sessions SET status = $1, updated_at = NOW() WHERE id = $2`,
+      [pendingStatus, sessionId]
     );
 
     return NextResponse.json({
       success: true,
-      data: { sessionId, status: 'verifying' },
+      data: { sessionId, status: pendingStatus },
     });
   } catch (error) {
     console.error('Erro ao verificar código:', error);

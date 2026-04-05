@@ -54,7 +54,6 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
     try {
       const res = await verifySessionCode(flowId, code);
       if (res.success) {
-        // O worker vai processar — voltar para capturing para fazer polling
         onStepChange('capturing');
       } else {
         setSessionError(res.error || 'Código inválido.');
@@ -68,9 +67,8 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
     setSessionError('');
     setSessionLoading(true);
     try {
-      const res = await verifySessionCode(flowId, '', password);
+      const res = await verifySessionCode(flowId, undefined, password);
       if (res.success) {
-        // O worker vai processar — voltar para capturing para fazer polling
         onStepChange('capturing');
       } else {
         setSessionError(res.error || 'Senha incorreta.');
@@ -81,7 +79,6 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
 
   function handleCapturingComplete(status: string) {
     if (status === 'active') {
-      // Sessão restaurada automaticamente sem código
       onStepChange('configure_ai');
     } else if (status === 'awaiting_2fa') {
       onStepChange('session_2fa');
@@ -127,7 +124,7 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
         <>
           <CodeInput
             title="Código de conexão do assistente"
-            description={'⚠️ Este é um NOVO código, diferente do anterior! Verifique seu app Telegram — você recebeu uma mensagem com um código numérico de 5 dígitos. NÃO use o código anterior do portal.'}
+            description={'Este é um NOVO código, diferente do anterior! Verifique seu app Telegram — você recebeu uma mensagem com um código numérico de 5 dígitos. NÃO use o código anterior do portal.'}
             descriptionBg="#E1F5EE" descriptionBorder="#9FE1CB" descriptionColor="#085041"
             buttonText="Conectar assistente"
             loading={sessionLoading}

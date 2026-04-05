@@ -15,6 +15,8 @@ class SessionStatus(str, Enum):
     API_CAPTURED = "api_captured"
     AWAITING_SESSION_CODE = "awaiting_session_code"
     AWAITING_2FA = "awaiting_2fa"
+    VERIFYING_CODE = "verifying_code"
+    VERIFYING_2FA = "verifying_2fa"
     ACTIVE = "active"
     DISCONNECTED = "disconnected"
     RECONNECTING = "reconnecting"
@@ -86,7 +88,8 @@ TABLES: list[Table] = [
             Column("phone", "VARCHAR(20)"),
             Column("api_id", "INTEGER"),
             Column("api_hash_encrypted", "VARCHAR(255)"),
-            Column("status", "VARCHAR(50)", nullable=False, default="'idle'"),
+            Column("status", "VARCHAR(50)", nullable=False, default="'idle'",
+                   check="status IN ('idle','awaiting_portal_code','portal_authenticated','capturing_api','api_captured','awaiting_session_code','awaiting_2fa','verifying_code','verifying_2fa','active','disconnected','reconnecting','error')"),
             Column("session_string", "TEXT", comment="String da sessão Telethon (StringSession)"),
             Column("session_string_encrypted", "TEXT", comment="Session string criptografada (backup seguro)"),
             Column("error_message", "TEXT", comment="Última mensagem de erro"),
@@ -134,6 +137,7 @@ TABLES: list[Table] = [
         indexes=[
             Index("idx_contacts_tenant", ["tenant_id"]),
             Index("idx_contacts_last_contact", ["tenant_id", "last_contact_at DESC"]),
+            Index("idx_contacts_is_new", ["tenant_id", "is_new", "first_contact_at"]),
         ],
         unique_constraints=[
             UniqueConstraint("uq_contacts_tenant_user", ["tenant_id", "telegram_user_id"]),
@@ -152,6 +156,10 @@ TABLES: list[Table] = [
             Column("telegram_message_id", "BIGINT", comment="ID original da mensagem no Telegram"),
             Column("media_type", "VARCHAR(20)", comment="Tipo de mídia: text, photo, video, document, voice, sticker"),
             Column("reply_to_message_id", "UUID", comment="ID da mensagem que esta responde (threading)"),
+            Column("sentiment", "VARCHAR(20)", comment="Sentimento da mensagem: positive, neutral, negative"),
+            Column("category", "VARCHAR(30)", comment="Categoria: greeting, question, complaint, order, feedback"),
+            Column("word_count", "INTEGER", default="0", comment="Contagem de palavras da mensagem"),
+            Column("response_time_ms", "INTEGER", comment="Tempo de resposta em milissegundos (para outgoing)"),
             Column("created_at", "TIMESTAMP", default="NOW()"),
         ],
         indexes=[
@@ -159,6 +167,10 @@ TABLES: list[Table] = [
             Index("idx_messages_tenant", ["tenant_id", "created_at DESC"]),
             Index("idx_messages_contact_recent", ["tenant_id", "contact_id", "created_at DESC"]),
             Index("idx_messages_reply", ["reply_to_message_id"], where="reply_to_message_id IS NOT NULL"),
+            Index("idx_messages_created_at", ["created_at"]),
+            Index("idx_messages_direction", ["tenant_id", "direction", "created_at"]),
+            Index("idx_messages_sentiment", ["tenant_id", "sentiment"], where="sentiment IS NOT NULL"),
+            Index("idx_messages_category", ["tenant_id", "category"], where="category IS NOT NULL"),
         ],
     ),
 ]
@@ -213,7 +225,6 @@ def generate_full_schema() -> str:
         "-- =============================================",
         "-- BotFans CRM - Schema gerado automaticamente",
         "-- Gerado a partir de db/schema.py",
-        "-- NÃO EDITE MANUALMENTE — edite db/schema.py",
         "-- =============================================",
         "",
     ]

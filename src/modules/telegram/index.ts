@@ -5,5 +5,8 @@ export { PhoneForm } from './components/PhoneForm';
 export { CodeInput } from './components/CodeInput';
 export { CapturingScreen } from './components/CapturingScreen';
 export { AiProfileForm } from './components/AiProfileForm';
+export { AnalyticsDashboard } from './components/dashboard';
 export * from './types';
 export * from './api';
+export * from './analytics.api';
+export * from './analytics.types';

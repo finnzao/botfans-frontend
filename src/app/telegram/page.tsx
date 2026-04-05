@@ -27,18 +27,14 @@ export default function TelegramPage() {
         const mapped = statusToStep(res.data.status);
         setHasSession(!!res.data.hasSession);
 
-        // Se status é intermediário sem flowId, verificar se pode reconectar
         const needsFlow: OnboardingStep[] = ['portal_code', 'capturing', 'session_code', 'session_2fa', 'reconnecting'];
         if (needsFlow.includes(mapped) && !res.data.flowId) {
-          console.log(`[TelegramPage] Status "${res.data.status}" sem flowId`);
-          // Se tem session_string, mostrar como desconectado (pode reconectar)
           if (res.data.hasSession) {
             setStep('disconnected');
           } else {
             setStep('phone');
           }
         } else if (mapped === 'disconnected' && res.data.hasSession) {
-          // Desconectado mas com sessão salva — pode reconectar
           setStep('disconnected');
         } else {
           setStep(mapped);
@@ -58,7 +54,7 @@ export default function TelegramPage() {
       if (res.success) {
         setStep('disconnected');
         setFlowId(null);
-        setHasSession(true); // session_string é preservada
+        setHasSession(true);
       }
     } catch (e) {
       console.error('Erro ao desconectar:', e);
@@ -71,7 +67,6 @@ export default function TelegramPage() {
       const res = await reconnectSession(TEST_TENANT_ID);
       if (res.success) {
         if (res.data?.status === 'active') {
-          // Já estava ativa
           setStep('active');
         } else if (res.data?.flowId) {
           setFlowId(res.data.flowId);
@@ -79,7 +74,6 @@ export default function TelegramPage() {
         }
       } else {
         alert(res.error || 'Erro ao reconectar');
-        // Se falhou, voltar para o início
         setStep('phone');
         setHasSession(false);
       }
@@ -118,6 +112,12 @@ export default function TelegramPage() {
               <path d="M22 2L11 13" /><path d="M22 2L15 22L11 13L2 9L22 2Z" />
             </svg>
             Telegram
+          </a>
+          <a href="/telegram/analytics" style={styles.navItem}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 20V10" /><path d="M12 20V4" /><path d="M6 20v-6" />
+            </svg>
+            Analytics
           </a>
           <span style={styles.navDisabled}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

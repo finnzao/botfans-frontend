@@ -8,6 +8,8 @@ export type SessionStatus =
   | 'api_captured'
   | 'awaiting_session_code'
   | 'awaiting_2fa'
+  | 'verifying_code'
+  | 'verifying_2fa'
   | 'active'
   | 'disconnected'
   | 'reconnecting'

@@ -10,7 +10,6 @@ export async function GET(req: NextRequest) {
   const flowId = req.nextUrl.searchParams.get('flowId');
 
   try {
-    // ─── Consulta por flowId (polling durante onboarding) ───
     if (flowId) {
       const flow = await getFlowState(flowId);
       if (!flow) {
@@ -20,15 +19,12 @@ export async function GET(req: NextRequest) {
 
       await touchFlowState(flowId);
 
-      // Sempre consultar o banco para pegar o status mais recente
-      // (worker pode ter atualizado diretamente)
       const result = await db.query(
         `SELECT status, error_message FROM telegram_sessions WHERE id = $1`, [flow.sessionId]
       );
       const dbStatus = result.rows[0]?.status || flow.step;
       const errorMessage = result.rows[0]?.error_message || flow.errorMessage || null;
 
-      // Usar o status mais "avançado" entre flow e banco
       const effectiveStatus = resolveStatus(flow.step, dbStatus);
 
       log.debug(`Status consultado via flowId`, {
@@ -50,7 +46,6 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // ─── Consulta por tenantId (carregamento da página) ───
     if (tenantId) {
       const result = await db.query(
         `SELECT id, tenant_id, phone, status, session_string IS NOT NULL AND length(session_string) > 10 as has_session,
@@ -96,11 +91,6 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/**
- * Resolve conflito entre flow step e db status.
- * O status mais "avançado" vence, pois o worker pode ter atualizado
- * o banco diretamente sem passar pelo flow.
- */
 function resolveStatus(flowStep: string, dbStatus: string): string {
   const priority: Record<string, number> = {
     'idle': 0,
@@ -112,6 +102,7 @@ function resolveStatus(flowStep: string, dbStatus: string): string {
     'verifying_2fa': 5,
     'awaiting_session_code': 6,
     'awaiting_2fa': 7,
+    'reconnecting': 8,
     'active': 10,
     'disconnected': -1,
     'error': -2,
@@ -121,9 +112,8 @@ function resolveStatus(flowStep: string, dbStatus: string): string {
   const flowPriority = priority[flowStep] ?? 0;
   const dbPriority = priority[dbStatus] ?? 0;
 
-  // Se algum deles é "error", propagar o erro
   if (dbStatus === 'error') return 'error';
+  if (flowStep === 'error') return 'error';
 
-  // Retornar o mais avançado
   return dbPriority >= flowPriority ? dbStatus : flowStep;
 }

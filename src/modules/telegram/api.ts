@@ -11,7 +11,6 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiR
   return res.json();
 }
 
-/** Passo 1: Envia número, backend faz request ao my.telegram.org/auth/send_password */
 export function startFlow(tenantId: string, phone: string) {
   return request<{ flowId: string }>('/start', {
     method: 'POST',
@@ -19,7 +18,6 @@ export function startFlow(tenantId: string, phone: string) {
   });
 }
 
-/** Passo 2: Envia código do portal (my.telegram.org), backend faz login e captura api_id/api_hash */
 export function verifyPortalCode(flowId: string, code: string) {
   return request<{ status: string }>('/verify-portal', {
     method: 'POST',
@@ -27,35 +25,33 @@ export function verifyPortalCode(flowId: string, code: string) {
   });
 }
 
-/** Passo 3: Envia código da sessão Telethon (+ senha 2FA opcional) */
-export function verifySessionCode(flowId: string, code: string, password2fa?: string) {
+export function verifySessionCode(flowId: string, code?: string, password2fa?: string) {
   return request<{ status: string }>('/verify-session', {
     method: 'POST',
-    body: JSON.stringify({ flowId, code, password2fa }),
+    body: JSON.stringify({
+      flowId,
+      code: code || undefined,
+      password2fa: password2fa || undefined,
+    }),
   });
 }
 
-/** Consulta status atual */
 export function getStatus(tenantId: string) {
   return request<TelegramSession & { status: string; flowId?: string; hasSession?: boolean }>(`/status?tenantId=${tenantId}`);
 }
 
-/** Consulta status por flowId (polling durante onboarding) */
 export function getFlowStatus(flowId: string) {
   return request<{ status: string; flowId: string; sessionId: string; errorMessage?: string }>(`/status?flowId=${flowId}`);
 }
 
-/** Consulta status por sessão (usado pelo hook de polling) */
 export function getSessionStatus(tenantId: string) {
   return request<TelegramSession & { status: string; id?: string }>(`/status?tenantId=${tenantId}`);
 }
 
-/** Lista contatos capturados */
 export function getContacts(tenantId: string) {
   return request<{ contacts: IContact[]; total: number }>(`/contacts?tenantId=${tenantId}`);
 }
 
-/** Reconectar sessão existente (sem pedir código) */
 export function reconnectSession(tenantId: string) {
   return request<{ flowId?: string; status: string; message?: string }>('/reconnect', {
     method: 'POST',
@@ -63,7 +59,6 @@ export function reconnectSession(tenantId: string) {
   });
 }
 
-/** Desconectar sessão (preserva session_string para reconexão futura) */
 export function disconnectSession(tenantId: string) {
   return request<{ status: string }>('/disconnect', {
     method: 'POST',
@@ -71,7 +66,6 @@ export function disconnectSession(tenantId: string) {
   });
 }
 
-/** Inicia sessão com credenciais manuais (fluxo antigo) */
 export function initSession(data: { phone: string; apiId: string; apiHash: string; tenantId: string }) {
   return request<{ id: string }>('/init', {
     method: 'POST',
@@ -79,7 +73,6 @@ export function initSession(data: { phone: string; apiId: string; apiHash: strin
   });
 }
 
-/** Verifica código (fluxo antigo) */
 export function verifyCode(data: { sessionId: string; code: string; password2fa?: string }) {
   return request<{ sessionId: string; status: string }>('/verify', {
     method: 'POST',

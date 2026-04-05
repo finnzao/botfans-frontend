@@ -10,7 +10,7 @@ interface Props {
 }
 
 const POLL_INTERVAL = 2000;
-const WORKER_TIMEOUT = 90000; // Increased from 60s to 90s
+const WORKER_TIMEOUT = 90000;
 
 export function CapturingScreen({ onComplete, onError, flowId }: Props) {
   const polling = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -36,22 +36,20 @@ export function CapturingScreen({ onComplete, onError, flowId }: Props) {
       }
 
       try {
-        const res = await fetch(`/api/telegram/status?flowId=${flowId}`);
-        const data = await res.json();
-        if (data.success && data.data) {
-          const st = data.data.status;
+        const res = await getFlowStatus(flowId);
+        if (res.success && res.data) {
+          const st = res.data.status;
           setCurrentStatus(st);
 
           if (st === 'awaiting_session_code' || st === 'awaiting_2fa') {
             stop();
             onComplete(st);
           } else if (st === 'active') {
-            // Sessão restaurada com sucesso (session_string válida, sem pedir código)
             stop();
             onComplete('active');
           } else if (st === 'error') {
             stop();
-            onError(data.data.errorMessage || 'Erro ao configurar. Tente novamente.');
+            onError(res.data.errorMessage || 'Erro ao configurar. Tente novamente.');
           } else if (st === 'expired') {
             stop();
             onError('Sessão expirada. Inicie novamente.');
@@ -104,7 +102,7 @@ export function CapturingScreen({ onComplete, onError, flowId }: Props) {
 
       {elapsed > 20 && waiting && (
         <div style={styles.warningBox}>
-          <p style={styles.warningText}>⚠ O worker está demorando. Verifique se está rodando:</p>
+          <p style={styles.warningText}>O worker está demorando. Verifique se está rodando:</p>
           <code style={styles.codeBlock}>cd src/worker && python main.py</code>
         </div>
       )}
