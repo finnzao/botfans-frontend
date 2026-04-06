@@ -70,6 +70,36 @@ export interface IAiProfile {
   welcomeMessage: string;
   systemPrompt: string;
   captureFields: string[];
+  autoApproveOrders: boolean;
+  businessHours: Record<string, string[]> | null;
+  maxOrdersPerDay: number | null;
+  paymentInstructions: string | null;
+  serviceMenuMessage: string | null;
+}
+
+export type ServiceCategory = 'content' | 'call' | 'subscription' | 'custom' | 'pack';
+export type DeliveryMethod = 'telegram' | 'link' | 'platform' | 'manual';
+
+export type OrderStatus =
+  | 'draft'
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  | 'awaiting_payment'
+  | 'paid'
+  | 'in_production'
+  | 'delivered'
+  | 'cancelled'
+  | 'expired';
+
+export type PaymentStatus = 'pending' | 'paid' | 'refunded' | 'failed';
+
+export interface ITenant {
+  id: string;
+  ownerName: string;
+  email: string;
+  displayName: string;
+  isActive: boolean;
 }
 
 export interface ApiResponse<T = unknown> {

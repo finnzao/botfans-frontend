@@ -3,9 +3,9 @@
 import { useTenant } from '@/core/lib/tenant-context';
 import { AuthScreen } from '@/modules/telegram/components/AuthScreen';
 import { AppShell } from '@/modules/telegram/components/AppShell';
-import { AnalyticsDashboard } from '@/modules/telegram/components/dashboard';
+import { OrdersKanban } from '@/modules/telegram/components/orders/OrdersKanban';
 
-export default function AnalyticsPage() {
+export default function OrdersPage() {
   const { tenant, loading } = useTenant();
 
   if (loading) {
@@ -15,8 +15,8 @@ export default function AnalyticsPage() {
   if (!tenant) return <AuthScreen />;
 
   return (
-    <AppShell activeTab="analytics">
-      <AnalyticsDashboard tenantId={tenant.tenantId} />
+    <AppShell activeTab="orders">
+      <OrdersKanban tenantId={tenant.tenantId} />
     </AppShell>
   );
 }
