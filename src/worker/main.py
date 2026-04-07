@@ -134,12 +134,7 @@ async def dispatch_task(data: dict):
             })
 
 
-# ═══════════════════════════════════════════════════════════
-# BROADCAST HANDLER
-# ═══════════════════════════════════════════════════════════
-
 async def handle_broadcast(data: dict):
-    """Processa comandos de broadcast (start, pause, cancel)."""
     from broadcast_sender import start_broadcast, pause_broadcast, cancel_broadcast
 
     action = data.get("action")
@@ -164,7 +159,6 @@ async def handle_broadcast(data: dict):
 
 
 async def _safe_broadcast(job_id: str, tenant_id: str, session_id: str):
-    """Wrapper seguro para broadcast — roda como task independente."""
     from broadcast_sender import start_broadcast
     try:
         await start_broadcast(job_id, tenant_id, session_id)
@@ -173,10 +167,6 @@ async def _safe_broadcast(job_id: str, tenant_id: str, session_id: str):
         from database_tags import update_broadcast_status
         update_broadcast_status(job_id, "failed")
 
-
-# ═══════════════════════════════════════════════════════════
-# SESSION HANDLERS (unchanged)
-# ═══════════════════════════════════════════════════════════
 
 async def handle_start_session(data: dict):
     action = data.get("action")
@@ -289,10 +279,6 @@ async def handle_verify(data: dict):
 
     log.info(f"verify resultado: {result}")
 
-
-# ═══════════════════════════════════════════════════════════
-# QUEUE CONSUMER & LIFECYCLE
-# ═══════════════════════════════════════════════════════════
 
 async def process_pending_tasks():
     log_separator(log, "PROCESSANDO FILA PENDENTE")
@@ -416,7 +402,7 @@ async def graceful_shutdown():
 
 
 async def main():
-    log_separator(log, "BotFans Telegram Worker")
+    log_separator(log, "BotFans Telegram Worker (Pyrogram)")
     log.info(f"PID: {os.getpid()}")
     log.info(f"Redis: {REDIS_URL}")
     log.info(f"Env: {os.getenv('NODE_ENV', 'development')}")
