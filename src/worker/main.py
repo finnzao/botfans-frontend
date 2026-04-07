@@ -32,6 +32,7 @@ PUBSUB_CHANNELS = [
     "telegram:start_session",
     "telegram:init",
     "telegram:verify",
+    "telegram:broadcast",
 ]
 
 _shutdown_event = asyncio.Event()
@@ -100,12 +101,12 @@ async def dispatch_task(data: dict):
 
     if is_session_restoring(session_id):
         log.info(f"Sessão {session_id[:8]}... está sendo restaurada — aguardando...")
-        for _ in range(30):
+        for _ in range(60):
             await asyncio.sleep(1)
             if not is_session_restoring(session_id):
                 break
         if is_session_restoring(session_id):
-            log.warning(f"Sessão {session_id[:8]}... ainda restaurando após 30s — processando mesmo assim")
+            log.warning(f"Sessão {session_id[:8]}... ainda restaurando após 60s — processando mesmo assim")
 
     log.info(
         f"Dispatch task | channel={channel} | "
@@ -120,6 +121,8 @@ async def dispatch_task(data: dict):
             await handle_init(data)
         elif channel == "telegram:verify":
             await handle_verify(data)
+        elif channel == "telegram:broadcast":
+            await handle_broadcast(data)
         else:
             log.warning(f"Canal desconhecido: {channel}")
     except Exception as e:
@@ -130,6 +133,50 @@ async def dispatch_task(data: dict):
                 "errorMessage": f"Erro interno: {type(e).__name__}"
             })
 
+
+# ═══════════════════════════════════════════════════════════
+# BROADCAST HANDLER
+# ═══════════════════════════════════════════════════════════
+
+async def handle_broadcast(data: dict):
+    """Processa comandos de broadcast (start, pause, cancel)."""
+    from broadcast_sender import start_broadcast, pause_broadcast, cancel_broadcast
+
+    action = data.get("action")
+    job_id = data.get("jobId")
+    tenant_id = data.get("tenantId")
+    session_id = data.get("sessionId")
+
+    log_separator(log, f"HANDLE BROADCAST | action={action}")
+    log.info(f"job={job_id[:8] if job_id else '?'}... | tenant={tenant_id[:8] if tenant_id else '?'}...")
+
+    if action == "start" and job_id and tenant_id and session_id:
+        asyncio.create_task(_safe_broadcast(job_id, tenant_id, session_id))
+
+    elif action == "pause" and job_id:
+        pause_broadcast(job_id)
+
+    elif action == "cancel" and job_id and tenant_id:
+        cancel_broadcast(job_id, tenant_id)
+
+    else:
+        log.warning(f"Broadcast action inválida: {action}")
+
+
+async def _safe_broadcast(job_id: str, tenant_id: str, session_id: str):
+    """Wrapper seguro para broadcast — roda como task independente."""
+    from broadcast_sender import start_broadcast
+    try:
+        await start_broadcast(job_id, tenant_id, session_id)
+    except Exception as e:
+        log.error(f"Broadcast falhou | job={job_id[:8]}... | {type(e).__name__}: {e}", exc_info=True)
+        from database_tags import update_broadcast_status
+        update_broadcast_status(job_id, "failed")
+
+
+# ═══════════════════════════════════════════════════════════
+# SESSION HANDLERS (unchanged)
+# ═══════════════════════════════════════════════════════════
 
 async def handle_start_session(data: dict):
     action = data.get("action")
@@ -172,7 +219,7 @@ async def handle_start_session(data: dict):
             if success:
                 result = {"status": "active"}
             else:
-                result = {"status": "error", "error": "Falha na reconexão. Session string pode estar inválida."}
+                result = {"status": "error", "error": "Falha na reconexão após múltiplas tentativas."}
 
         else:
             if not api_id or not api_hash:
@@ -242,6 +289,10 @@ async def handle_verify(data: dict):
 
     log.info(f"verify resultado: {result}")
 
+
+# ═══════════════════════════════════════════════════════════
+# QUEUE CONSUMER & LIFECYCLE
+# ═══════════════════════════════════════════════════════════
 
 async def process_pending_tasks():
     log_separator(log, "PROCESSANDO FILA PENDENTE")

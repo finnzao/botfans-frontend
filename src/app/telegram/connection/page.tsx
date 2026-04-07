@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTenant } from '@/core/lib/tenant-context';
 import { AuthScreen } from '@/modules/telegram/components/AuthScreen';
 import { AppShell } from '@/modules/telegram/components/AppShell';
@@ -24,6 +24,48 @@ export default function ConnectionPage() {
   const [localStep, setLocalStep] = useState<OnboardingStep | null>(null);
   const [flowId, setFlowId] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+
+  /**
+   * Auto-reconnect: quando a página carrega e a sessão está
+   * disconnected com session salva, tenta reconectar automaticamente.
+   * 
+   * A session string do Telegram não expira — se está salva,
+   * provavelmente funciona. O disconnect geralmente é por
+   * restart do worker, não por invalidação da sessão.
+   */
+  const autoReconnectAttempted = useRef(false);
+
+  useEffect(() => {
+    if (
+      !autoReconnectAttempted.current &&
+      !session.loading &&
+      session.step === 'disconnected' &&
+      session.hasSession &&
+      tenant?.tenantId
+    ) {
+      autoReconnectAttempted.current = true;
+      handleAutoReconnect();
+    }
+  }, [session.loading, session.step, session.hasSession, tenant?.tenantId]);
+
+  async function handleAutoReconnect() {
+    if (!tenant) return;
+    setReconnecting(true);
+    try {
+      const res = await reconnectSession(tenant.tenantId);
+      if (res.success) {
+        if (res.data?.status === 'active') {
+          setLocalStep('active');
+          session.refresh();
+        } else if (res.data?.flowId) {
+          setFlowId(res.data.flowId);
+          setLocalStep('capturing');
+        }
+      }
+    } finally {
+      setReconnecting(false);
+    }
+  }
 
   const step = localStep ?? session.step;
 
@@ -65,7 +107,6 @@ export default function ConnectionPage() {
         <p style={s.pageSubtitle}>Gerencie suas integrações com plataformas de mensagens</p>
       </div>
 
-      {/* Telegram connection card */}
       <div style={s.channelCard}>
         <div style={s.channelHeader}>
           <div style={s.channelLeft}>
@@ -81,11 +122,13 @@ export default function ConnectionPage() {
           </div>
           <div style={s.statusPill(step === 'active')}>
             <span style={s.statusPillDot(step === 'active')} />
-            {step === 'active' ? 'Online' : step === 'disconnected' ? 'Offline' : 'Não configurado'}
+            {step === 'active' ? 'Online'
+              : step === 'disconnected'
+                ? (reconnecting ? 'Reconectando...' : 'Offline')
+                : 'Não configurado'}
           </div>
         </div>
 
-        {/* Detalhes da sessão quando conectado ou desconectado com sessão */}
         {(step === 'active' || (step === 'disconnected' && session.hasSession)) && (
           <div style={s.sessionDetails}>
             <div style={s.detailGrid}>
@@ -96,7 +139,11 @@ export default function ConnectionPage() {
               <div style={s.detailItem}>
                 <span style={s.detailLabel}>Status</span>
                 <span style={{ ...s.detailValue, color: step === 'active' ? 'var(--green)' : 'var(--amber)' }}>
-                  {step === 'active' ? 'Conectado e respondendo' : 'Sessão salva, não respondendo'}
+                  {step === 'active'
+                    ? 'Conectado e respondendo'
+                    : reconnecting
+                      ? 'Tentando reconectar...'
+                      : 'Sessão salva, não respondendo'}
                 </span>
               </div>
               <div style={s.detailItem}>
@@ -122,7 +169,6 @@ export default function ConnectionPage() {
           </div>
         )}
 
-        {/* Setup quando não configurado */}
         {!['active', 'disconnected'].includes(step) && (
           <div style={s.setupArea}>
             <TelegramSetup
@@ -135,7 +181,6 @@ export default function ConnectionPage() {
           </div>
         )}
 
-        {/* Setup quando desconectado sem sessão */}
         {step === 'disconnected' && !session.hasSession && (
           <div style={s.setupArea}>
             <TelegramSetup
@@ -149,7 +194,6 @@ export default function ConnectionPage() {
         )}
       </div>
 
-      {/* Outros canais (futuros) */}
       <div style={s.channelCardDisabled}>
         <div style={s.channelHeader}>
           <div style={s.channelLeft}>
@@ -186,7 +230,6 @@ export default function ConnectionPage() {
         </div>
       </div>
 
-      {/* Contatos recentes quando ativo */}
       {step === 'active' && (
         <div style={s.section}>
           <h2 style={s.sectionTitle}>Contatos recentes</h2>
@@ -201,85 +244,29 @@ const s = {
   loadingPage: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', minHeight: '100vh', gap: 8 },
   spinner: { width: 28, height: 28, borderWidth: 3, borderStyle: 'solid' as const, borderColor: 'var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
   loadingText: { fontSize: 13, color: 'var(--text-secondary)' },
-
   pageHeader: { marginBottom: 28 } as React.CSSProperties,
   pageTitle: { fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px', letterSpacing: '-0.02em' } as React.CSSProperties,
   pageSubtitle: { fontSize: 14, color: 'var(--text-secondary)', margin: 0 } as React.CSSProperties,
-
-  channelCard: {
-    background: 'var(--bg-card)', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--border)',
-    borderRadius: 'var(--radius-lg)', overflow: 'hidden' as const, marginBottom: 12,
-    boxShadow: 'var(--shadow-sm)',
-  } as React.CSSProperties,
-  channelCardDisabled: {
-    background: 'var(--bg-card)', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--border)',
-    borderRadius: 'var(--radius-lg)', marginBottom: 12, opacity: 0.7,
-  } as React.CSSProperties,
-  channelHeader: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '20px 24px', gap: 16,
-  } as React.CSSProperties,
+  channelCard: { background: 'var(--bg-card)', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' as const, marginBottom: 12, boxShadow: 'var(--shadow-sm)' } as React.CSSProperties,
+  channelCardDisabled: { background: 'var(--bg-card)', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--border)', borderRadius: 'var(--radius-lg)', marginBottom: 12, opacity: 0.7 } as React.CSSProperties,
+  channelHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px', gap: 16 } as React.CSSProperties,
   channelLeft: { display: 'flex', alignItems: 'center', gap: 14 } as React.CSSProperties,
-  channelIcon: {
-    width: 44, height: 44, borderRadius: 12, background: '#2AABEE',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-  } as React.CSSProperties,
+  channelIcon: { width: 44, height: 44, borderRadius: 12, background: '#2AABEE', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 } as React.CSSProperties,
   channelName: { fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 2px' } as React.CSSProperties,
   channelDesc: { fontSize: 12, color: 'var(--text-secondary)', margin: 0 } as React.CSSProperties,
-
-  statusPill: (active: boolean): React.CSSProperties => ({
-    display: 'flex', alignItems: 'center', gap: 6,
-    padding: '5px 12px', borderRadius: 20,
-    fontSize: 12, fontWeight: 600,
-    background: active ? 'var(--green-light)' : 'var(--bg-muted)',
-    color: active ? 'var(--green)' : 'var(--text-secondary)',
-  }),
-  statusPillDot: (active: boolean): React.CSSProperties => ({
-    width: 7, height: 7, borderRadius: '50%',
-    background: active ? 'var(--green)' : 'var(--text-tertiary)',
-    animation: active ? 'pulse 2s infinite' : 'none',
-  }),
-
-  sessionDetails: {
-    padding: '0 24px 20px',
-    borderTopWidth: 1, borderTopStyle: 'solid' as const, borderTopColor: 'var(--border-light)',
-    marginTop: -4,
-  } as React.CSSProperties,
-  detailGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16,
-    padding: '16px 0',
-  } as React.CSSProperties,
+  statusPill: (active: boolean): React.CSSProperties => ({ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: active ? 'var(--green-light)' : 'var(--bg-muted)', color: active ? 'var(--green)' : 'var(--text-secondary)' }),
+  statusPillDot: (active: boolean): React.CSSProperties => ({ width: 7, height: 7, borderRadius: '50%', background: active ? 'var(--green)' : 'var(--text-tertiary)', animation: active ? 'pulse 2s infinite' : 'none' }),
+  sessionDetails: { padding: '0 24px 20px', borderTopWidth: 1, borderTopStyle: 'solid' as const, borderTopColor: 'var(--border-light)', marginTop: -4 } as React.CSSProperties,
+  detailGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, padding: '16px 0' } as React.CSSProperties,
   detailItem: { display: 'flex', flexDirection: 'column' as const, gap: 3 } as React.CSSProperties,
   detailLabel: { fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)', textTransform: 'uppercase' as const, letterSpacing: '0.05em' } as React.CSSProperties,
   detailValue: { fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' } as React.CSSProperties,
-
   actionRow: { display: 'flex', gap: 10, paddingTop: 4 } as React.CSSProperties,
-  primaryBtn: {
-    padding: '9px 20px', fontSize: 13, fontWeight: 600,
-    background: 'var(--accent)', color: '#fff', border: 'none',
-    borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-  } as React.CSSProperties,
-  dangerBtn: {
-    padding: '9px 20px', fontSize: 13, fontWeight: 500,
-    background: 'var(--bg-card)', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--red)',
-    borderRadius: 'var(--radius-sm)', color: 'var(--red)', cursor: 'pointer',
-  } as React.CSSProperties,
-  ghostBtn: {
-    padding: '9px 20px', fontSize: 13, fontWeight: 500,
-    background: 'none', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--border)',
-    borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer',
-  } as React.CSSProperties,
-
-  comingSoon: {
-    fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)',
-    background: 'var(--bg-muted)', padding: '4px 10px', borderRadius: 10,
-  } as React.CSSProperties,
-
-  setupArea: {
-    padding: '0 24px 24px',
-    borderTopWidth: 1, borderTopStyle: 'solid' as const, borderTopColor: 'var(--border-light)',
-  } as React.CSSProperties,
-
+  primaryBtn: { padding: '9px 20px', fontSize: 13, fontWeight: 600, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer' } as React.CSSProperties,
+  dangerBtn: { padding: '9px 20px', fontSize: 13, fontWeight: 500, background: 'var(--bg-card)', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--red)', borderRadius: 'var(--radius-sm)', color: 'var(--red)', cursor: 'pointer' } as React.CSSProperties,
+  ghostBtn: { padding: '9px 20px', fontSize: 13, fontWeight: 500, background: 'none', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer' } as React.CSSProperties,
+  comingSoon: { fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)', background: 'var(--bg-muted)', padding: '4px 10px', borderRadius: 10 } as React.CSSProperties,
+  setupArea: { padding: '0 24px 24px', borderTopWidth: 1, borderTopStyle: 'solid' as const, borderTopColor: 'var(--border-light)' } as React.CSSProperties,
   section: { marginTop: 28 } as React.CSSProperties,
   sectionTitle: { fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 16px' } as React.CSSProperties,
 };

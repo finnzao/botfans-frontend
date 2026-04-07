@@ -6,7 +6,6 @@ const STEPS: { key: OnboardingStep; label: string }[] = [
   { key: 'phone', label: 'Número' },
   { key: 'portal_code', label: 'Código' },
   { key: 'session_code', label: 'Conexão' },
-  { key: 'configure_ai', label: 'Perfil IA' },
   { key: 'active', label: 'Ativo' },
 ];
 
@@ -17,9 +16,8 @@ const STEP_POSITION: Record<OnboardingStep, number> = {
   reconnecting: 2,
   session_code: 2,
   session_2fa: 2,
-  configure_ai: 3,
-  active: 4,
-  disconnected: 4,
+  active: 3,
+  disconnected: 3,
 };
 
 interface Props {
@@ -41,15 +39,15 @@ export function StepIndicator({ current }: Props) {
                 width: 28, height: 28, borderRadius: '50%',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 12, fontWeight: 600,
-                background: isDone ? '#639922' : isActive ? '#185FA5' : '#e5e5e5',
-                color: isDone || isActive ? '#fff' : '#999',
+                background: isDone ? 'var(--green)' : isActive ? 'var(--accent)' : 'var(--border)',
+                color: isDone || isActive ? '#fff' : 'var(--text-tertiary)',
                 transition: 'all 0.3s',
               }}>
                 {isDone ? '✓' : i + 1}
               </div>
               <span style={{
                 fontSize: 11,
-                color: isActive ? '#185FA5' : isDone ? '#639922' : '#999',
+                color: isActive ? 'var(--accent)' : isDone ? 'var(--green)' : 'var(--text-tertiary)',
                 fontWeight: isActive ? 600 : 400,
               }}>
                 {step.label}
@@ -58,7 +56,7 @@ export function StepIndicator({ current }: Props) {
             {i < STEPS.length - 1 && (
               <div style={{
                 flex: 1, height: 2, margin: '0 8px', marginBottom: 18, borderRadius: 1,
-                background: isDone ? '#639922' : '#e5e5e5',
+                background: isDone ? 'var(--green)' : 'var(--border)',
                 transition: 'background 0.3s',
               }} />
             )}

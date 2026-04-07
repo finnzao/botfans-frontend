@@ -9,8 +9,8 @@ interface Props {
   flowId: string;
 }
 
-const POLL_INTERVAL = 2000;
-const WORKER_TIMEOUT = 90000;
+const POLL_INTERVAL = 2500;
+const WORKER_TIMEOUT = 180000; // 3 min — reconexão com 5 retries + backoff
 
 export function CapturingScreen({ onComplete, onError, flowId }: Props) {
   const polling = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -78,7 +78,7 @@ export function CapturingScreen({ onComplete, onError, flowId }: Props) {
       </p>
       <p style={styles.desc}>
         {currentStatus === 'reconnecting'
-          ? 'Restaurando conexão usando sessão salva — não será necessário novo código.'
+          ? 'Restaurando conexão usando sessão salva. O sistema tenta até 5 vezes automaticamente.'
           : waiting
             ? 'Credenciais capturadas! Aguardando o assistente iniciar a conexão...'
             : 'Conectando ao Telegram automaticamente.'
@@ -93,17 +93,23 @@ export function CapturingScreen({ onComplete, onError, flowId }: Props) {
           active={currentStatus === 'capturing_api'}
         />
         <StepLine
-          label="Conectando assistente ao Telegram"
+          label={currentStatus === 'reconnecting' ? 'Reconectando ao Telegram' : 'Conectando assistente ao Telegram'}
           active={waiting && currentStatus !== 'capturing_api'}
           done={currentStatus === 'awaiting_session_code' || currentStatus === 'active'}
           detail={waiting ? `Aguardando worker... (${elapsed}s)` : undefined}
         />
       </div>
 
-      {elapsed > 20 && waiting && (
+      {elapsed > 45 && waiting && (
         <div style={styles.warningBox}>
-          <p style={styles.warningText}>O worker está demorando. Verifique se está rodando:</p>
-          <code style={styles.codeBlock}>cd src/worker && python main.py</code>
+          <p style={styles.warningText}>
+            {currentStatus === 'reconnecting'
+              ? 'A reconexão está demorando. O sistema tenta automaticamente até 5 vezes com backoff exponencial.'
+              : 'O worker está demorando. Verifique se está rodando:'}
+          </p>
+          {currentStatus !== 'reconnecting' && (
+            <code style={styles.codeBlock}>cd src/worker && python main.py</code>
+          )}
         </div>
       )}
     </div>

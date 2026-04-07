@@ -5,7 +5,6 @@ import { StepIndicator } from './StepIndicator';
 import { PhoneForm } from './PhoneForm';
 import { CodeInput } from './CodeInput';
 import { CapturingScreen } from './CapturingScreen';
-import { AiProfileForm } from './AiProfileForm';
 import { verifyPortalCode, verifySessionCode } from '../api';
 import type { OnboardingStep } from '../types';
 
@@ -23,8 +22,7 @@ const STEP_TITLES: Record<OnboardingStep, string> = {
   capturing: 'Configurando...',
   session_code: 'Código de conexão do assistente',
   session_2fa: 'Verificação em duas etapas',
-  configure_ai: 'Configurar assistente IA',
-  active: 'Assistente ativo',
+  active: 'Conexão ativa',
   reconnecting: 'Reconectando...',
   disconnected: 'Sessão desconectada',
 };
@@ -79,7 +77,9 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
 
   function handleCapturingComplete(status: string) {
     if (status === 'active') {
-      onStepChange('configure_ai');
+      // Conexão concluída — vai direto para active
+      // A configuração da IA é feita na página separada /telegram/assistant
+      onStepChange('active');
     } else if (status === 'awaiting_2fa') {
       onStepChange('session_2fa');
     } else {
@@ -90,7 +90,7 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
   return (
     <div>
       <StepIndicator current={currentStep} />
-      <h2 style={{ fontSize: 18, fontWeight: 600, margin: '0 0 20px', color: '#222' }}>
+      <h2 style={{ fontSize: 18, fontWeight: 600, margin: '0 0 20px', color: 'var(--text-primary)' }}>
         {STEP_TITLES[currentStep]}
       </h2>
 
@@ -145,10 +145,6 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
           onSubmit={handle2fa} passwordMode passwordLabel="Senha cloud do Telegram (2FA)"
         />
       )}
-
-      {currentStep === 'configure_ai' && (
-        <AiProfileForm tenantId={tenantId} onSuccess={() => onStepChange('active')} />
-      )}
     </div>
   );
 }
@@ -156,7 +152,7 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
 const styles: Record<string, React.CSSProperties> = {
   backBtn: {
     display: 'block', margin: '20px auto 0', padding: '8px 16px',
-    fontSize: 13, color: '#888', background: 'none', border: 'none',
+    fontSize: 13, color: 'var(--text-tertiary)', background: 'none', border: 'none',
     cursor: 'pointer', textDecoration: 'underline',
   },
 };

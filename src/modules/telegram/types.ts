@@ -12,7 +12,6 @@ export type OnboardingStep =
   | 'capturing'
   | 'session_code'
   | 'session_2fa'
-  | 'configure_ai'
   | 'active'
   | 'reconnecting'
   | 'disconnected';

@@ -1,0 +1,1 @@
+export { AssistantConfig } from './AssistantConfig';

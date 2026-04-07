@@ -67,6 +67,7 @@ export const CHANNELS = {
   TELEGRAM_START_SESSION: 'telegram:start_session',
   TELEGRAM_STATUS: 'telegram:status',
   TELEGRAM_MESSAGE: 'telegram:message',
+  TELEGRAM_BROADCAST: 'telegram:broadcast',
 } as const;
 
 export const QUEUES = {
