@@ -402,7 +402,7 @@ async def graceful_shutdown():
 
 
 async def main():
-    log_separator(log, "BotFans Telegram Worker (Pyrogram)")
+    log_separator(log, "BotFans Telegram Worker (Telethon)")
     log.info(f"PID: {os.getpid()}")
     log.info(f"Redis: {REDIS_URL}")
     log.info(f"Env: {os.getenv('NODE_ENV', 'development')}")

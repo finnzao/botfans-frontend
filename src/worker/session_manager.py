@@ -2,14 +2,14 @@ import os
 import asyncio
 import time
 import random
-from pyrogram import Client, filters
-from pyrogram.types import Message
-from pyrogram.errors import (
-    SessionPasswordNeeded,
-    PhoneCodeInvalid,
-    PhoneCodeExpired,
-    FloodWait,
-    AuthKeyUnregistered,
+from telethon import TelegramClient, events
+from telethon.sessions import StringSession
+from telethon.errors import (
+    SessionPasswordNeededError,
+    PhoneCodeInvalidError,
+    PhoneCodeExpiredError,
+    FloodWaitError,
+    AuthKeyUnregisteredError,
     RPCError,
 )
 from logger import get_logger, log_separator
@@ -28,7 +28,7 @@ from database import (
 
 log = get_logger("session_manager")
 
-active_clients: dict[str, Client] = {}
+active_clients: dict[str, TelegramClient] = {}
 client_metadata: dict[str, dict] = {}
 _session_locks: dict[str, asyncio.Lock] = {}
 _restoring_sessions: set[str] = set()
@@ -54,24 +54,24 @@ def _backoff_delay(attempt: int) -> float:
 
 def _create_client(
     session_id: str, api_id: int, api_hash: str, session_string: str = None
-) -> Client:
-    kwargs = {
-        "name": f"session_{session_id[:8]}",
-        "api_id": api_id,
-        "api_hash": api_hash,
-        "in_memory": True,
-        "ipv6": False,
-        "no_updates": False,
-    }
-    if session_string:
-        kwargs["session_string"] = session_string
-    return Client(**kwargs)
+) -> TelegramClient:
+    session = StringSession(session_string) if session_string else StringSession()
+    client = TelegramClient(
+        session,
+        api_id,
+        api_hash,
+        connection_retries=3,
+        retry_delay=2,
+        auto_reconnect=True,
+        request_retries=3,
+    )
+    return client
 
 
-async def _safe_disconnect(client: Client, session_id: str = "?"):
+async def _safe_disconnect(client: TelegramClient, session_id: str = "?"):
     try:
-        if client and client.is_connected:
-            await asyncio.wait_for(client.stop(), timeout=10)
+        if client and client.is_connected():
+            await asyncio.wait_for(client.disconnect(), timeout=10)
     except Exception as e:
         log.debug(f"safe_disconnect | {session_id[:8]}... | {type(e).__name__}: {e}")
 
@@ -94,16 +94,16 @@ async def cleanup_existing_session(session_id: str):
         await _safe_disconnect(old, session_id)
 
 
-async def _save_session(session_id: str, client: Client):
+async def _save_session(session_id: str, client: TelegramClient):
     try:
-        ss = await client.export_session_string()
+        ss = client.session.save()
         if ss and len(ss) > 10:
             save_session_string(session_id, ss)
     except Exception as e:
         log.error(f"Erro ao salvar session | {session_id[:8]}... | {e}")
 
 
-def _start_bg_tasks(session_id: str, client: Client):
+def _start_bg_tasks(session_id: str, client: TelegramClient):
     tasks = [
         asyncio.create_task(_periodic_saver(session_id, client)),
         asyncio.create_task(_health_check(session_id, client)),
@@ -111,10 +111,10 @@ def _start_bg_tasks(session_id: str, client: Client):
     _background_tasks[session_id] = tasks
 
 
-async def _periodic_saver(session_id: str, client: Client):
+async def _periodic_saver(session_id: str, client: TelegramClient):
     while session_id in active_clients:
         await asyncio.sleep(SESSION_SAVE_INTERVAL)
-        if session_id in active_clients and client.is_connected:
+        if session_id in active_clients and client.is_connected():
             try:
                 await _save_session(session_id, client)
             except Exception as e:
@@ -123,7 +123,7 @@ async def _periodic_saver(session_id: str, client: Client):
             break
 
 
-async def _health_check(session_id: str, client: Client):
+async def _health_check(session_id: str, client: TelegramClient):
     failures = 0
     while session_id in active_clients:
         await asyncio.sleep(HEALTH_CHECK_INTERVAL)
@@ -133,7 +133,7 @@ async def _health_check(session_id: str, client: Client):
             me = await asyncio.wait_for(client.get_me(), timeout=15)
             if me:
                 failures = 0
-        except AuthKeyUnregistered:
+        except AuthKeyUnregisteredError:
             log.error(f"Auth key revogada | {session_id[:8]}...")
             update_session_status(session_id, "disconnected", "Sessão encerrada pelo usuário")
             save_session_string(session_id, "")
@@ -153,7 +153,7 @@ async def _health_check(session_id: str, client: Client):
 
 async def _activate_session(
     session_id: str, tenant_id: str, phone: str,
-    api_id: int, api_hash: str, client: Client, user_info: dict
+    api_id: int, api_hash: str, client: TelegramClient, user_info: dict
 ):
     active_clients[session_id] = client
     client_metadata[session_id] = {
@@ -180,25 +180,27 @@ async def start_session(session_id: str, tenant_id: str, phone: str, api_id: int
         if session_string and len(session_string) > 10:
             try:
                 client = _create_client(session_id, api_id, api_hash, session_string)
-                await asyncio.wait_for(client.start(), timeout=CONNECT_TIMEOUT)
-                me = await client.get_me()
-                if me:
-                    new_ss = await client.export_session_string()
-                    save_session_string(session_id, new_ss)
-                    await _activate_session(
-                        session_id, tenant_id, phone, api_id, api_hash, client,
-                        {"user_id": me.id, "username": me.username, "first_name": me.first_name}
-                    )
-                    return {"status": "active"}
+                await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
+                if await client.is_user_authorized():
+                    me = await client.get_me()
+                    if me:
+                        ss = client.session.save()
+                        save_session_string(session_id, ss)
+                        await _activate_session(
+                            session_id, tenant_id, phone, api_id, api_hash, client,
+                            {"user_id": me.id, "username": me.username, "first_name": me.first_name}
+                        )
+                        return {"status": "active"}
+                await _safe_disconnect(client, session_id)
             except Exception as e:
                 log.warning(f"Restauração falhou: {type(e).__name__}: {e}")
 
         client = _create_client(session_id, api_id, api_hash)
         try:
-            log.info(f"Conectando ao Telegram (IPv4, timeout={CONNECT_TIMEOUT}s)... | {session_id[:8]}...")
+            log.info(f"Conectando ao Telegram (timeout={CONNECT_TIMEOUT}s)... | {session_id[:8]}...")
             await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
             log.info(f"Conectado! Enviando código para {phone[:6]}*** | {session_id[:8]}...")
-            sent = await client.send_code(phone)
+            sent = await client.send_code_request(phone)
 
             update_session_status(session_id, "awaiting_session_code")
             active_clients[session_id] = client
@@ -208,12 +210,17 @@ async def start_session(session_id: str, tenant_id: str, phone: str, api_id: int
                 "phone_code_hash": sent.phone_code_hash,
                 "connected_at": time.time(),
             }
+
+            ss = client.session.save()
+            if ss and len(ss) > 10:
+                save_session_string(session_id, ss)
+
             return {"status": "awaiting_session_code"}
 
-        except FloodWait as e:
+        except FloodWaitError as e:
             await _safe_disconnect(client, session_id)
-            update_session_status(session_id, "error", f"Aguarde {e.value}s")
-            return {"status": "error", "error": f"Telegram pede para aguardar {e.value} segundos"}
+            update_session_status(session_id, "error", f"Aguarde {e.seconds}s")
+            return {"status": "error", "error": f"Telegram pede para aguardar {e.seconds} segundos"}
         except RPCError as e:
             await _safe_disconnect(client, session_id)
             msg = str(e)
@@ -236,7 +243,7 @@ async def verify_code(session_id: str, tenant_id: str, phone: str, code: str, ap
         log_separator(log, f"VERIFY CODE | {session_id[:8]}...")
 
         client = active_clients.get(session_id)
-        if not client or not client.is_connected:
+        if not client or not client.is_connected():
             if client:
                 await _safe_disconnect(client, session_id)
             creds = get_session_credentials(session_id)
@@ -255,7 +262,7 @@ async def verify_code(session_id: str, tenant_id: str, phone: str, code: str, ap
             return {"status": "error", "error": "Hash do código não encontrado. Inicie novamente."}
 
         try:
-            await client.sign_in(phone, phone_code_hash, code)
+            await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
             me = await client.get_me()
             log.info(f"Autenticado | user={me.first_name} (@{me.username})")
 
@@ -265,12 +272,12 @@ async def verify_code(session_id: str, tenant_id: str, phone: str, code: str, ap
             )
             return {"status": "active"}
 
-        except SessionPasswordNeeded:
+        except SessionPasswordNeededError:
             update_session_status(session_id, "awaiting_2fa")
             return {"status": "awaiting_2fa"}
-        except PhoneCodeInvalid:
+        except PhoneCodeInvalidError:
             return {"status": "error", "error": "Código inválido"}
-        except PhoneCodeExpired:
+        except PhoneCodeExpiredError:
             update_session_status(session_id, "error", "Código expirado")
             return {"status": "error", "error": "Código expirado. Inicie novamente."}
         except RPCError as e:
@@ -285,11 +292,11 @@ async def verify_2fa(session_id: str, tenant_id: str, password: str):
     async with lock:
         log_separator(log, f"VERIFY 2FA | {session_id[:8]}...")
         client = active_clients.get(session_id)
-        if not client or not client.is_connected:
+        if not client or not client.is_connected():
             return {"status": "error", "error": "Sessão perdida. Inicie novamente."}
 
         try:
-            await client.check_password(password)
+            await client.sign_in(password=password)
             me = await client.get_me()
             log.info(f"Autenticado com 2FA | {me.first_name} (@{me.username})")
 
@@ -332,14 +339,19 @@ async def reconnect_session(session_id: str) -> bool:
             client = _create_client(
                 session_id, creds["api_id"], creds["api_hash_encrypted"], ss
             )
-            await asyncio.wait_for(client.start(), timeout=CONNECT_TIMEOUT)
-            me = await client.get_me()
+            await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
 
+            if not await client.is_user_authorized():
+                await _safe_disconnect(client, session_id)
+                log.warning(f"Sessão não autorizada | {session_id[:8]}...")
+                continue
+
+            me = await client.get_me()
             if not me:
                 await _safe_disconnect(client, session_id)
                 continue
 
-            new_ss = await client.export_session_string()
+            new_ss = client.session.save()
             save_session_string(session_id, new_ss)
 
             await _activate_session(
@@ -350,7 +362,7 @@ async def reconnect_session(session_id: str) -> bool:
             log.info(f"Reconectado (tentativa {attempt + 1}) | {session_id[:8]}...")
             return True
 
-        except AuthKeyUnregistered:
+        except AuthKeyUnregisteredError:
             log.warning(f"Auth inválida | {session_id[:8]}...")
             update_session_status(session_id, "disconnected", "Sessão revogada")
             save_session_string(session_id, "")
@@ -409,15 +421,20 @@ async def _restore_single(sess: dict) -> bool:
 
     try:
         client = _create_client(sid, sess["api_id"], sess["api_hash_encrypted"], ss)
-        await asyncio.wait_for(client.start(), timeout=CONNECT_TIMEOUT)
-        me = await client.get_me()
+        await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
 
+        if not await client.is_user_authorized():
+            await _safe_disconnect(client, sid)
+            update_session_status(sid, "disconnected")
+            return False
+
+        me = await client.get_me()
         if not me:
             await _safe_disconnect(client, sid)
             update_session_status(sid, "disconnected")
             return False
 
-        new_ss = await client.export_session_string()
+        new_ss = client.session.save()
         save_session_string(sid, new_ss)
 
         await _activate_session(
@@ -427,7 +444,7 @@ async def _restore_single(sess: dict) -> bool:
         )
         return True
 
-    except AuthKeyUnregistered:
+    except AuthKeyUnregisteredError:
         update_session_status(sid, "disconnected")
         save_session_string(sid, "")
         return False
@@ -441,7 +458,7 @@ async def auto_reconnect_loop():
     while True:
         await asyncio.sleep(60)
         for sid, client in list(active_clients.items()):
-            if not client.is_connected:
+            if not client.is_connected():
                 log.warning(f"Sessão {sid[:8]}... desconectou")
                 try:
                     await reconnect_session(sid)
@@ -449,23 +466,26 @@ async def auto_reconnect_loop():
                     log.error(f"Auto-reconexão falhou | {type(e).__name__}: {e}")
 
 
-def register_message_handler(client: Client, session_id: str, tenant_id: str):
+def register_message_handler(client: TelegramClient, session_id: str, tenant_id: str):
     log_separator(log, f"REGISTRANDO HANDLER | {session_id[:8]}...")
     ai_profile = get_ai_profile(tenant_id)
 
-    @client.on_message(filters.private & filters.incoming & ~filters.bot)
-    async def on_message(_, message: Message):
+    @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
+    async def on_message(event):
         msg_received_at = time.time()
         try:
-            if not message.text or not message.text.strip():
+            if not event.text or not event.text.strip():
                 return
 
-            user = message.from_user
-            message_text = message.text
+            sender = await event.get_sender()
+            if not sender or getattr(sender, 'bot', False):
+                return
 
-            log.info(f"MSG IN | {user.first_name} (@{user.username}) | len={len(message_text)}")
+            message_text = event.text
 
-            contact_id = save_contact(tenant_id, user)
+            log.info(f"MSG IN | {sender.first_name} (@{sender.username}) | len={len(message_text)}")
+
+            contact_id = save_contact(tenant_id, sender)
             if not contact_id:
                 return
 
@@ -478,21 +498,21 @@ def register_message_handler(client: Client, session_id: str, tenant_id: str):
                 process_auto_tags(
                     tenant_id=tenant_id, contact_id=contact_id,
                     message=message_text,
-                    sender_name=user.first_name or "",
-                    sender_username=user.username or "",
+                    sender_name=sender.first_name or "",
+                    sender_username=sender.username or "",
                     current_tags=current_tags,
                 )
             except Exception as e:
                 log.warning(f"Auto-tagger falhou | {type(e).__name__}: {e}")
 
             history = get_conversation_history(tenant_id, contact_id, limit=10)
-            response = generate_response(message_text, user, ai_profile, history)
+            response = generate_response(message_text, sender, ai_profile, history)
 
             if response:
                 await asyncio.sleep(random.uniform(1.0, 3.0))
-                await message.reply(response)
+                await event.respond(response)
                 elapsed = int((time.time() - msg_received_at) * 1000)
-                log.info(f"MSG OUT | {user.first_name} | len={len(response)} | {elapsed}ms")
+                log.info(f"MSG OUT | {sender.first_name} | len={len(response)} | {elapsed}ms")
                 save_message(tenant_id, contact_id, "outgoing", response, "ai", elapsed)
 
         except Exception as e:
@@ -505,7 +525,7 @@ def generate_response(message: str, sender, ai_profile: dict | None, history: li
     business = ai_profile.get("business_name", "")
     welcome = ai_profile.get("welcome_message", "")
     msg_lower = message.lower().strip()
-    name = sender.first_name or "você"
+    name = getattr(sender, 'first_name', None) or "você"
 
     greetings = ["oi", "olá", "ola", "hey", "bom dia", "boa tarde", "boa noite", "hello", "hi", "eae", "e aí"]
     if any(g in msg_lower for g in greetings):
@@ -549,7 +569,7 @@ def get_active_sessions_info() -> list[dict]:
             "username": meta.get("username"),
             "connected_at": meta.get("connected_at"),
             "uptime_seconds": int(time.time() - meta.get("connected_at", time.time())),
-            "is_connected": active_clients[sid].is_connected if sid in active_clients else False,
+            "is_connected": active_clients[sid].is_connected() if sid in active_clients else False,
             "restored": meta.get("restored", False),
         }
         for sid, meta in client_metadata.items()

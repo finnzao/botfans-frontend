@@ -1,6 +1,6 @@
 import asyncio
 import time
-from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated
+from telethon.errors import FloodWaitError, UserIsBlockedError, InputUserDeactivatedError
 from logger import get_logger
 from database_tags import (
     get_broadcast_job,
@@ -21,7 +21,7 @@ async def start_broadcast(job_id: str, tenant_id: str, session_id: str):
     from session_manager import active_clients
 
     client = active_clients.get(session_id)
-    if not client or not client.is_connected:
+    if not client or not client.is_connected():
         log.error(f"Broadcast abortado: sessão não conectada | job={job_id[:8]}...")
         update_broadcast_status(job_id, "failed")
         return
@@ -86,8 +86,8 @@ async def start_broadcast(job_id: str, tenant_id: str, session_id: str):
 
                     log.debug(f"Broadcast sent | to={contact_name} | tg_id={tg_user_id}")
 
-                except FloodWait as e:
-                    wait = e.value + 5
+                except FloodWaitError as e:
+                    wait = e.seconds + 5
                     log.warning(
                         f"FloodWait! Pausando {wait}s | job={job_id[:8]}... | "
                         f"sent={sent} | failed={failed}"
@@ -103,11 +103,11 @@ async def start_broadcast(job_id: str, tenant_id: str, session_id: str):
                         )
                         failed += 1
 
-                except UserIsBlocked:
+                except UserIsBlockedError:
                     update_broadcast_message_status(msg["id"], "skipped", "Usuário bloqueou")
                     log.debug(f"Skipped (blocked) | {contact_name}")
 
-                except InputUserDeactivated:
+                except InputUserDeactivatedError:
                     update_broadcast_message_status(msg["id"], "skipped", "Conta desativada")
                     log.debug(f"Skipped (deactivated) | {contact_name}")
 

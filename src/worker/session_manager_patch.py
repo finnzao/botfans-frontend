@@ -2,8 +2,7 @@ import os
 import asyncio
 import time
 import random
-from pyrogram import filters
-from pyrogram.types import Message
+from telethon import events
 from logger import get_logger
 from database import (
     save_contact,
@@ -28,22 +27,25 @@ def register_message_handler(client, session_id: str, tenant_id: str):
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     redis_client = aioredis.from_url(redis_url, decode_responses=True)
 
-    @client.on_message(filters.private & filters.incoming & ~filters.bot)
-    async def on_new_message(_, message: Message):
+    @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
+    async def on_new_message(event):
         msg_received_at = time.time()
         try:
-            if not message.text or not message.text.strip():
+            if not event.text or not event.text.strip():
                 return
 
-            user = message.from_user
-            message_text = message.text
+            sender = await event.get_sender()
+            if not sender or getattr(sender, 'bot', False):
+                return
+
+            message_text = event.text
 
             log.info(
-                f"MSG IN | {user.first_name} (@{user.username}) | "
+                f"MSG IN | {sender.first_name} (@{sender.username}) | "
                 f"tenant={tenant_id[:8]}... | len={len(message_text)}"
             )
 
-            contact_id = save_contact(tenant_id, user)
+            contact_id = save_contact(tenant_id, sender)
             if not contact_id:
                 return
 
@@ -59,21 +61,21 @@ def register_message_handler(client, session_id: str, tenant_id: str):
                     tenant_id=tenant_id,
                     contact_id=contact_id,
                     message=message_text,
-                    sender_name=user.first_name or "você",
+                    sender_name=sender.first_name or "você",
                     services=services,
                     ai_profile=ai_profile,
                     history=history,
                 )
 
             if response is None:
-                response = _fallback_response(message_text, user, ai_profile)
+                response = _fallback_response(message_text, sender, ai_profile)
 
             if response:
                 await asyncio.sleep(random.uniform(1.0, 3.0))
-                await message.reply(response)
+                await event.respond(response)
 
                 elapsed_ms = int((time.time() - msg_received_at) * 1000)
-                log.info(f"MSG OUT | to={user.first_name} | len={len(response)} | {elapsed_ms}ms")
+                log.info(f"MSG OUT | to={sender.first_name} | len={len(response)} | {elapsed_ms}ms")
                 save_message(tenant_id, contact_id, "outgoing", response, "ai", elapsed_ms)
 
         except Exception as e:
@@ -87,7 +89,7 @@ def _fallback_response(message: str, sender, ai_profile: dict | None) -> str | N
     business = ai_profile.get("business_name", "")
     welcome = ai_profile.get("welcome_message", "")
     msg_lower = message.lower().strip()
-    name = sender.first_name or "você"
+    name = getattr(sender, 'first_name', None) or "você"
 
     greetings = ["oi", "olá", "ola", "hey", "bom dia", "boa tarde", "boa noite", "hello", "hi", "eae"]
     if any(g in msg_lower for g in greetings):

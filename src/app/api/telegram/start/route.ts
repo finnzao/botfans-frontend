@@ -16,7 +16,7 @@ async function fetchWithRetry(reqId: string, url: string, options: RequestInit) 
       return { ok: true as const, res };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const cause = err instanceof Error && 'cause' in err ? String((err as Record<string, unknown>).cause) : null;
+      const cause = err instanceof Error && 'cause' in err ? String((err as unknown as Record<string, unknown>).cause) : null;
       log.warn(`[${reqId}] Fetch tentativa ${attempt}/${MAX_RETRIES} falhou`, { error: msg, cause });
       if (attempt < MAX_RETRIES) {
         await new Promise(r => setTimeout(r, RETRY_DELAY * attempt));
@@ -59,6 +59,15 @@ export async function POST(req: NextRequest) {
     log.http('POST', 'my.telegram.org/auth/send_password', result.res.status, {
       bodyLength: portalRaw.length, bodyPreview: portalRaw.substring(0, 200),
     });
+
+    const rawLower = portalRaw.toLowerCase();
+    if (rawLower.includes('too many') || rawLower.includes('please try again later')) {
+      log.warn(`[${reqId}] Rate limit do portal Telegram`);
+      return NextResponse.json({
+        success: false,
+        error: 'Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.',
+      }, { status: 429 });
+    }
 
     let portalData: Record<string, unknown>;
     try {
