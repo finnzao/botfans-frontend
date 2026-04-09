@@ -17,24 +17,17 @@ export async function POST(req: NextRequest) {
 
     const result = await db.query(
       `SELECT id, phone, api_id, api_hash_encrypted, status,
-              session_string IS NOT NULL AND length(session_string) > 10 as has_session
+              session_string IS NOT NULL AND length(session_string) > 10 as has_session,
+              COALESCE(api_id, 0) > 0 AND COALESCE(length(api_hash_encrypted), 0) > 20 as has_credentials
        FROM telegram_sessions WHERE tenant_id = $1`,
       [tenantId]
     );
 
     if (result.rows.length === 0) {
-      return NextResponse.json({ success: false, error: 'Nenhuma sessão encontrada. Configure primeiro.' }, { status: 404 });
+      return NextResponse.json({ success: false, error: 'Nenhuma sessão encontrada.' }, { status: 404 });
     }
 
     const row = result.rows[0];
-
-    if (!row.has_session) {
-      log.warn(`[${reqId}] Tentativa de reconexão sem session_string | tenant=${tenantId.slice(0, 8)}...`);
-      return NextResponse.json({
-        success: false,
-        error: 'Sessão não possui dados salvos. É necessário configurar novamente.',
-      }, { status: 400 });
-    }
 
     if (row.status === 'active') {
       return NextResponse.json({
@@ -46,20 +39,59 @@ export async function POST(req: NextRequest) {
     if (row.status === 'reconnecting') {
       return NextResponse.json({
         success: true,
-        data: { status: 'reconnecting', message: 'Reconexão já está em andamento.' },
+        data: { status: 'reconnecting', message: 'Reconexão em andamento.' },
       });
     }
 
+    if (!row.has_credentials) {
+      return NextResponse.json({
+        success: false,
+        error: 'Credenciais API não encontradas. Configure novamente.',
+      }, { status: 400 });
+    }
+
     const flowId = randomUUID();
+
+    if (row.has_session) {
+      await setFlowState(flowId, {
+        tenantId,
+        sessionId: row.id,
+        phone: row.phone,
+        step: 'reconnecting',
+      });
+
+      await db.query(
+        `UPDATE telegram_sessions SET status = 'reconnecting', error_message = NULL, updated_at = NOW() WHERE id = $1`,
+        [row.id]
+      );
+
+      await publishToWorker(CHANNELS.TELEGRAM_START_SESSION, {
+        flowId,
+        sessionId: row.id,
+        tenantId,
+        phone: row.phone,
+        apiId: row.api_id,
+        apiHash: row.api_hash_encrypted,
+        action: 'reconnect',
+      });
+
+      log.info(`[${reqId}] Reconexão com session_string | session=${row.id.slice(0, 8)}...`);
+
+      return NextResponse.json({
+        success: true,
+        data: { flowId, status: 'reconnecting' },
+      });
+    }
+
     await setFlowState(flowId, {
       tenantId,
       sessionId: row.id,
       phone: row.phone,
-      step: 'reconnecting',
+      step: 'api_captured',
     });
 
     await db.query(
-      `UPDATE telegram_sessions SET status = 'reconnecting', error_message = NULL, updated_at = NOW() WHERE id = $1`,
+      `UPDATE telegram_sessions SET status = 'api_captured', error_message = NULL, updated_at = NOW() WHERE id = $1`,
       [row.id]
     );
 
@@ -70,14 +102,14 @@ export async function POST(req: NextRequest) {
       phone: row.phone,
       apiId: row.api_id,
       apiHash: row.api_hash_encrypted,
-      action: 'reconnect',
+      action: 'start_with_credentials',
     });
 
-    log.info(`[${reqId}] Reconexão solicitada | session=${row.id.slice(0, 8)}... | flowId=${flowId.slice(0, 8)}...`);
+    log.info(`[${reqId}] Reconexão sem session — usando credenciais | session=${row.id.slice(0, 8)}...`);
 
     return NextResponse.json({
       success: true,
-      data: { flowId, status: 'reconnecting' },
+      data: { flowId, status: 'api_captured' },
     });
   } catch (error) {
     log.error(`[${reqId}] Erro ao reconectar`, error);

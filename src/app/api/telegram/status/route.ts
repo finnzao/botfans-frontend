@@ -13,7 +13,6 @@ export async function GET(req: NextRequest) {
     if (flowId) {
       const flow = await getFlowState(flowId);
       if (!flow) {
-        log.debug(`Flow expirado`, { flowId });
         return NextResponse.json({ success: true, data: { status: 'expired' } });
       }
 
@@ -24,16 +23,12 @@ export async function GET(req: NextRequest) {
       );
       const dbStatus = result.rows[0]?.status || flow.step;
       const errorMessage = result.rows[0]?.error_message || flow.errorMessage || null;
-
       const effectiveStatus = resolveStatus(flow.step, dbStatus);
 
-      log.debug(`Status consultado via flowId`, {
-        flowId: flowId.slice(0, 8) + '...',
-        sessionId: flow.sessionId?.slice(0, 8) + '...',
-        flowStep: flow.step,
-        dbStatus,
-        effectiveStatus,
-      });
+      const workerBusy = [
+        'api_captured', 'capturing_api', 'reconnecting',
+        'verifying_code', 'verifying_2fa'
+      ].includes(effectiveStatus);
 
       return NextResponse.json({
         success: true,
@@ -42,13 +37,17 @@ export async function GET(req: NextRequest) {
           flowId,
           sessionId: flow.sessionId,
           errorMessage: effectiveStatus === 'error' ? errorMessage : null,
+          workerBusy,
+          workerAction: workerBusy ? getWorkerAction(effectiveStatus) : null,
         },
       });
     }
 
     if (tenantId) {
       const result = await db.query(
-        `SELECT id, tenant_id, phone, status, session_string IS NOT NULL AND length(session_string) > 10 as has_session,
+        `SELECT id, tenant_id, phone, status, error_message,
+                session_string IS NOT NULL AND length(session_string) > 10 as has_session,
+                COALESCE(api_id, 0) > 0 AND COALESCE(length(api_hash_encrypted), 0) > 20 as has_credentials,
                 created_at, updated_at
          FROM telegram_sessions WHERE tenant_id = $1`,
         [tenantId]
@@ -60,11 +59,10 @@ export async function GET(req: NextRequest) {
 
       const row = result.rows[0];
 
-      log.debug(`Sessão encontrada via tenantId`, {
-        sessionId: row.id?.slice(0, 8) + '...',
-        status: row.status,
-        hasSession: row.has_session,
-      });
+      const workerBusy = [
+        'api_captured', 'capturing_api', 'reconnecting',
+        'verifying_code', 'verifying_2fa', 'awaiting_session_code', 'awaiting_2fa'
+      ].includes(row.status);
 
       return NextResponse.json({
         success: true,
@@ -75,6 +73,10 @@ export async function GET(req: NextRequest) {
           status: row.status,
           phone: row.phone,
           hasSession: row.has_session,
+          hasCredentials: row.has_credentials,
+          errorMessage: ['error', 'disconnected'].includes(row.status) ? row.error_message : null,
+          workerBusy,
+          workerAction: workerBusy ? getWorkerAction(row.status) : null,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
         },
@@ -91,7 +93,23 @@ export async function GET(req: NextRequest) {
   }
 }
 
+function getWorkerAction(status: string): string {
+  const actions: Record<string, string> = {
+    'api_captured': 'Iniciando conexão com o Telegram...',
+    'capturing_api': 'Capturando credenciais da API...',
+    'reconnecting': 'Reconectando sessão salva...',
+    'verifying_code': 'Verificando código...',
+    'verifying_2fa': 'Verificando senha 2FA...',
+    'awaiting_session_code': 'Aguardando código de verificação...',
+    'awaiting_2fa': 'Aguardando senha 2FA...',
+  };
+  return actions[status] || 'Processando...';
+}
+
 function resolveStatus(flowStep: string, dbStatus: string): string {
+  if (dbStatus === 'error') return 'error';
+  if (flowStep === 'error') return 'error';
+
   const priority: Record<string, number> = {
     'idle': 0,
     'awaiting_portal_code': 1,
@@ -105,15 +123,11 @@ function resolveStatus(flowStep: string, dbStatus: string): string {
     'reconnecting': 8,
     'active': 10,
     'disconnected': -1,
-    'error': -2,
     'expired': -3,
   };
 
   const flowPriority = priority[flowStep] ?? 0;
   const dbPriority = priority[dbStatus] ?? 0;
-
-  if (dbStatus === 'error') return 'error';
-  if (flowStep === 'error') return 'error';
 
   return dbPriority >= flowPriority ? dbStatus : flowStep;
 }

@@ -2,10 +2,9 @@
 
 import { useState } from 'react';
 import { StepIndicator } from './StepIndicator';
-import { PhoneForm } from './PhoneForm';
 import { CodeInput } from './CodeInput';
 import { CapturingScreen } from './CapturingScreen';
-import { verifyPortalCode, verifySessionCode } from '../api';
+import { verifyPortalCode, verifySessionCode, startFlow } from '../api';
 import type { OnboardingStep } from '../types';
 
 interface Props {
@@ -32,6 +31,7 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
   const [portalLoading, setPortalLoading] = useState(false);
   const [sessionError, setSessionError] = useState('');
   const [sessionLoading, setSessionLoading] = useState(false);
+  const [capturingError, setCapturingError] = useState('');
 
   async function handlePortalCode(code: string) {
     if (!flowId) { setPortalError('Sessão expirada. Volte e insira seu número.'); return; }
@@ -77,14 +77,17 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
 
   function handleCapturingComplete(status: string) {
     if (status === 'active') {
-      // Conexão concluída — vai direto para active
-      // A configuração da IA é feita na página separada /telegram/assistant
       onStepChange('active');
     } else if (status === 'awaiting_2fa') {
       onStepChange('session_2fa');
     } else {
       onStepChange('session_code');
     }
+  }
+
+  function handleCapturingError(msg: string) {
+    setCapturingError(msg);
+    onStepChange('disconnected');
   }
 
   return (
@@ -94,8 +97,22 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
         {STEP_TITLES[currentStep]}
       </h2>
 
+      {capturingError && !['capturing', 'reconnecting'].includes(currentStep) && (
+        <div style={st.errorBox}>
+          <p style={st.errorText}>{capturingError}</p>
+          <button onClick={() => setCapturingError('')} style={st.errorDismiss}>×</button>
+        </div>
+      )}
+
       {currentStep === 'phone' && (
-        <PhoneForm tenantId={tenantId} onSuccess={(id) => { onFlowCreated(id); onStepChange('portal_code'); }} />
+        <PhoneInput
+          tenantId={tenantId}
+          onSuccess={(fId, skip) => {
+            onFlowCreated(fId);
+            setCapturingError('');
+            onStepChange(skip ? 'capturing' : 'portal_code');
+          }}
+        />
       )}
 
       {currentStep === 'portal_code' && (
@@ -108,7 +125,7 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
             error={portalError}
             onSubmit={handlePortalCode}
           />
-          <button onClick={() => onStepChange('phone')} style={styles.backBtn}>← Voltar e usar outro número</button>
+          <button onClick={() => onStepChange('phone')} style={st.backBtn}>← Voltar</button>
         </>
       )}
 
@@ -116,7 +133,7 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
         <CapturingScreen
           flowId={flowId}
           onComplete={handleCapturingComplete}
-          onError={(msg) => { setPortalError(msg); onStepChange('phone'); }}
+          onError={handleCapturingError}
         />
       )}
 
@@ -124,14 +141,14 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
         <>
           <CodeInput
             title="Código de conexão do assistente"
-            description={'Este é um NOVO código, diferente do anterior! Verifique seu app Telegram — você recebeu uma mensagem com um código numérico de 5 dígitos. NÃO use o código anterior do portal.'}
+            description="Verifique seu app Telegram — você recebeu uma mensagem com um código numérico de 5 dígitos. Este é um código DIFERENTE do anterior."
             descriptionBg="#E1F5EE" descriptionBorder="#9FE1CB" descriptionColor="#085041"
             buttonText="Conectar assistente"
             loading={sessionLoading}
             error={sessionError}
             onSubmit={handleSessionCode}
           />
-          <button onClick={() => onStepChange('phone')} style={styles.backBtn}>← Voltar ao início</button>
+          <button onClick={() => onStepChange('phone')} style={st.backBtn}>← Voltar ao início</button>
         </>
       )}
 
@@ -149,10 +166,82 @@ export function TelegramSetup({ tenantId, currentStep, flowId, onStepChange, onF
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+function PhoneInput({ tenantId, onSuccess }: { tenantId: string; onSuccess: (flowId: string, skipPortal: boolean) => void }) {
+  const [phone, setPhone] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  function format(value: string): string {
+    const digits = value.replace(/[^\d+]/g, '');
+    if (!digits.startsWith('+')) return '+' + digits;
+    return digits;
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    const cleaned = phone.replace(/\s/g, '');
+    if (cleaned.length < 10) {
+      setError('Número inválido. Use formato internacional: +5511999999999');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await startFlow(tenantId, cleaned);
+      if (res.success && res.data?.flowId) {
+        onSuccess(res.data.flowId, !!res.data.skipPortal);
+      } else {
+        setError(res.error || 'Erro ao iniciar. Tente novamente.');
+      }
+    } catch {
+      setError('Erro de conexão.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ background: '#E6F1FB', border: '1px solid #B5D4F4', borderRadius: 10, padding: '14px 18px', marginBottom: 24 }}>
+        <p style={{ fontSize: 13, color: '#0C447C', margin: 0, lineHeight: 1.6 }}>
+          Informe o número do Telegram que será usado como assistente.
+        </p>
+      </div>
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column' as const, gap: 18 }}>
+        <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 4 }}>
+          <label style={{ fontSize: 13, fontWeight: 500, color: '#333' }}>Número do Telegram</label>
+          <input
+            type="tel" placeholder="+55 11 99999-9999" value={phone}
+            onChange={e => setPhone(format(e.target.value))} required autoFocus
+            style={{ padding: '12px 14px', fontSize: 16, border: '1px solid #ddd', borderRadius: 8, outline: 'none', fontFamily: 'monospace', letterSpacing: 1 }}
+          />
+          <span style={{ fontSize: 11, color: '#999' }}>Formato internacional com código do país</span>
+        </div>
+        {error && <p style={{ fontSize: 13, color: '#A32D2D', background: '#FCEBEB', padding: '8px 12px', borderRadius: 6, margin: 0 }}>{error}</p>}
+        <button type="submit" disabled={loading} style={{
+          padding: '12px 24px', fontSize: 14, fontWeight: 600, background: '#185FA5', color: '#fff',
+          border: 'none', borderRadius: 8, marginTop: 8, opacity: loading ? 0.6 : 1, cursor: loading ? 'not-allowed' : 'pointer',
+        }}>
+          {loading ? 'Processando...' : 'Continuar'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+const st: Record<string, React.CSSProperties> = {
   backBtn: {
     display: 'block', margin: '20px auto 0', padding: '8px 16px',
     fontSize: 13, color: 'var(--text-tertiary)', background: 'none', border: 'none',
     cursor: 'pointer', textDecoration: 'underline',
+  },
+  errorBox: {
+    background: 'var(--red-light)', border: '1px solid #fca5a5', borderRadius: 10,
+    padding: '12px 16px', marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+  },
+  errorText: { fontSize: 13, color: 'var(--red)', margin: 0, lineHeight: 1.5, flex: 1 },
+  errorDismiss: {
+    background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer',
+    fontSize: 18, padding: '0 4px', flexShrink: 0, marginLeft: 8,
   },
 };

@@ -9,85 +9,67 @@ export interface SessionInfo {
   step: OnboardingStep;
   phone: string | null;
   hasSession: boolean;
+  hasCredentials: boolean;
+  errorMessage: string | null;
+  workerBusy: boolean;
+  workerAction: string | null;
   flowId: string | null;
   loading: boolean;
   refresh: () => Promise<void>;
 }
 
-/**
- * Hook que monitora o estado da sessão Telegram.
- * 
- * Polling adaptativo:
- * - Quando ativo: poll a cada 60s (só health check)
- * - Quando disconnected com sessão: poll a cada 15s
- *   (detecta reconexão automática pelo worker)
- * - Quando em setup: poll a cada 30s
- */
-export function useTelegramSession(tenantId: string | undefined): SessionInfo {
+export function useTelegramSession(tenantId: string | undefined, paused: boolean = false): SessionInfo {
   const [step, setStep] = useState<OnboardingStep>('phone');
   const [phone, setPhone] = useState<string | null>(null);
   const [hasSession, setHasSession] = useState(false);
+  const [hasCredentials, setHasCredentials] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [workerBusy, setWorkerBusy] = useState(false);
+  const [workerAction, setWorkerAction] = useState<string | null>(null);
   const [flowId, setFlowId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const stepRef = useRef<OnboardingStep>('phone');
 
   const refresh = useCallback(async () => {
     if (!tenantId) { setLoading(false); return; }
     try {
       const res = await getStatus(tenantId);
       if (res.success && res.data) {
-        const mapped = statusToStep(res.data.status);
-        setHasSession(!!res.data.hasSession);
-        setPhone(res.data.phone || null);
+        const d = res.data;
+        const mapped = statusToStep(d.status);
+        setHasSession(!!d.hasSession);
+        setHasCredentials(!!d.hasCredentials);
+        setPhone(d.phone || null);
+        setErrorMessage(d.errorMessage || null);
+        setWorkerBusy(!!d.workerBusy);
+        setWorkerAction(d.workerAction || null);
 
         const needsFlow: OnboardingStep[] = ['portal_code', 'capturing', 'session_code', 'session_2fa', 'reconnecting'];
-        if (needsFlow.includes(mapped) && !res.data.flowId) {
-          const newStep = res.data.hasSession ? 'disconnected' : 'phone';
-          setStep(newStep);
-          stepRef.current = newStep;
-        } else if (mapped === 'disconnected' && res.data.hasSession) {
+        if (needsFlow.includes(mapped) && !d.flowId) {
+          setStep(d.hasSession ? 'disconnected' : 'phone');
+        } else if (mapped === 'disconnected') {
           setStep('disconnected');
-          stepRef.current = 'disconnected';
         } else {
           setStep(mapped);
-          stepRef.current = mapped;
-          if (res.data.flowId) setFlowId(res.data.flowId);
+          if (d.flowId) setFlowId(d.flowId);
         }
       }
-    } catch { /* no session */ }
+    } catch {}
     finally { setLoading(false); }
   }, [tenantId]);
 
-  // Polling adaptativo baseado no estado
   useEffect(() => {
-    refresh();
-
-    function getInterval(): number {
-      switch (stepRef.current) {
-        case 'active': return 60000;      // 60s — só verificação
-        case 'disconnected': return 15000; // 15s — detectar reconexão
-        default: return 30000;             // 30s — setup
-      }
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
 
-    function setupInterval() {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+    if (!paused) {
+      refresh();
       if (tenantId) {
-        intervalRef.current = setInterval(() => {
-          refresh().then(() => {
-            // Reajustar intervalo se o estado mudou
-            const newInterval = getInterval();
-            if (intervalRef.current) {
-              clearInterval(intervalRef.current);
-              intervalRef.current = setInterval(refresh, newInterval);
-            }
-          });
-        }, getInterval());
+        intervalRef.current = setInterval(refresh, 30000);
       }
     }
-
-    setupInterval();
 
     return () => {
       if (intervalRef.current) {
@@ -95,7 +77,10 @@ export function useTelegramSession(tenantId: string | undefined): SessionInfo {
         intervalRef.current = null;
       }
     };
-  }, [refresh, tenantId]);
+  }, [refresh, tenantId, paused]);
 
-  return { step, phone, hasSession, flowId, loading, refresh };
+  return {
+    step, phone, hasSession, hasCredentials, errorMessage,
+    workerBusy, workerAction, flowId, loading, refresh,
+  };
 }

@@ -11,8 +11,25 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<ApiR
   return res.json();
 }
 
+export interface StatusData {
+  id?: string;
+  tenantId?: string;
+  channel?: string;
+  status: string;
+  phone?: string;
+  hasSession?: boolean;
+  hasCredentials?: boolean;
+  errorMessage?: string;
+  workerBusy?: boolean;
+  workerAction?: string;
+  flowId?: string;
+  sessionId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export function startFlow(tenantId: string, phone: string) {
-  return request<{ flowId: string }>('/start', {
+  return request<{ flowId: string; skipPortal?: boolean }>('/start', {
     method: 'POST',
     body: JSON.stringify({ tenantId, phone }),
   });
@@ -37,15 +54,15 @@ export function verifySessionCode(flowId: string, code?: string, password2fa?: s
 }
 
 export function getStatus(tenantId: string) {
-  return request<TelegramSession & { status: string; flowId?: string; hasSession?: boolean }>(`/status?tenantId=${tenantId}`);
+  return request<StatusData>(`/status?tenantId=${tenantId}`);
 }
 
 export function getFlowStatus(flowId: string) {
-  return request<{ status: string; flowId: string; sessionId: string; errorMessage?: string }>(`/status?flowId=${flowId}`);
+  return request<StatusData>(`/status?flowId=${flowId}`);
 }
 
 export function getSessionStatus(tenantId: string) {
-  return request<TelegramSession & { status: string; id?: string }>(`/status?tenantId=${tenantId}`);
+  return request<StatusData>(`/status?tenantId=${tenantId}`);
 }
 
 export function getContacts(tenantId: string) {
@@ -61,6 +78,13 @@ export function reconnectSession(tenantId: string) {
 
 export function disconnectSession(tenantId: string) {
   return request<{ status: string }>('/disconnect', {
+    method: 'POST',
+    body: JSON.stringify({ tenantId }),
+  });
+}
+
+export function resetSession(tenantId: string) {
+  return request<{ status: string }>('/reset', {
     method: 'POST',
     body: JSON.stringify({ tenantId }),
   });

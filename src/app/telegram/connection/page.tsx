@@ -1,13 +1,14 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTenant } from '@/core/lib/tenant-context';
 import { AuthScreen } from '@/modules/telegram/components/AuthScreen';
 import { AppShell } from '@/modules/telegram/components/AppShell';
 import { TelegramSetup } from '@/modules/telegram/components/TelegramSetup';
 import { ContactsList } from '@/modules/telegram/components/ContactsList';
 import { useTelegramSession } from '@/modules/telegram/hooks/useTelegramSession';
-import { disconnectSession, reconnectSession } from '@/modules/telegram/api';
+import { disconnectSession, reconnectSession, resetSession } from '@/modules/telegram/api';
 import type { OnboardingStep } from '@/modules/telegram/types';
 
 function formatPhone(phone: string): string {
@@ -20,37 +21,46 @@ function formatPhone(phone: string): string {
 
 export default function ConnectionPage() {
   const { tenant, loading: authLoading } = useTenant();
-  const session = useTelegramSession(tenant?.tenantId);
   const [localStep, setLocalStep] = useState<OnboardingStep | null>(null);
   const [flowId, setFlowId] = useState<string | null>(null);
-  const [reconnecting, setReconnecting] = useState(false);
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [reconnectError, setReconnectError] = useState<string | null>(null);
 
-  /**
-   * Auto-reconnect: quando a página carrega e a sessão está
-   * disconnected com session salva, tenta reconectar automaticamente.
-   * 
-   * A session string do Telegram não expira — se está salva,
-   * provavelmente funciona. O disconnect geralmente é por
-   * restart do worker, não por invalidação da sessão.
-   */
+  const step = localStep ?? 'phone';
+  const isCapturing = ['capturing', 'reconnecting'].includes(step);
+
+  const session = useTelegramSession(tenant?.tenantId, isCapturing);
+
+  const effectiveStep = localStep ?? session.step;
+
   const autoReconnectAttempted = useRef(false);
+  const actionLock = useRef(false);
 
   useEffect(() => {
     if (
       !autoReconnectAttempted.current &&
       !session.loading &&
       session.step === 'disconnected' &&
-      session.hasSession &&
-      tenant?.tenantId
+      (session.hasSession || session.hasCredentials) &&
+      tenant?.tenantId &&
+      !localStep
     ) {
       autoReconnectAttempted.current = true;
-      handleAutoReconnect();
+      doReconnect(true);
     }
-  }, [session.loading, session.step, session.hasSession, tenant?.tenantId]);
+  }, [session.loading, session.step, session.hasSession, session.hasCredentials, tenant?.tenantId, localStep]);
 
-  async function handleAutoReconnect() {
-    if (!tenant) return;
-    setReconnecting(true);
+  useEffect(() => {
+    if (!localStep && session.step) {
+      // sync
+    }
+  }, [session.step, localStep]);
+
+  const doReconnect = useCallback(async (isAuto = false) => {
+    if (!tenant || actionLock.current) return;
+    actionLock.current = true;
+    setActionInProgress('reconnecting');
+    setReconnectError(null);
     try {
       const res = await reconnectSession(tenant.tenantId);
       if (res.success) {
@@ -59,32 +69,63 @@ export default function ConnectionPage() {
           session.refresh();
         } else if (res.data?.flowId) {
           setFlowId(res.data.flowId);
-          setLocalStep('capturing');
+          const nextStep = res.data.status === 'reconnecting' ? 'reconnecting' : 'capturing';
+          setLocalStep(nextStep as OnboardingStep);
         }
+      } else if (!isAuto) {
+        setReconnectError(res.error || 'Erro ao reconectar.');
       }
+    } catch {
+      if (!isAuto) setReconnectError('Erro de conexão.');
     } finally {
-      setReconnecting(false);
+      setActionInProgress(null);
+      actionLock.current = false;
+    }
+  }, [tenant, session]);
+
+  function handleStepChange(newStep: OnboardingStep) {
+    setReconnectError(null);
+    setLocalStep(newStep);
+    if (newStep === 'active' || newStep === 'disconnected') {
+      setFlowId(null);
+      session.refresh();
     }
   }
 
-  const step = localStep ?? session.step;
-
   async function handleDisconnect() {
-    if (!tenant) return;
-    const res = await disconnectSession(tenant.tenantId);
-    if (res.success) { setLocalStep('disconnected'); setFlowId(null); session.refresh(); }
+    if (!tenant || actionLock.current) return;
+    actionLock.current = true;
+    setActionInProgress('disconnecting');
+    try {
+      const res = await disconnectSession(tenant.tenantId);
+      if (res.success) {
+        setLocalStep('disconnected');
+        setFlowId(null);
+        session.refresh();
+      }
+    } finally {
+      setActionInProgress(null);
+      actionLock.current = false;
+    }
   }
 
-  async function handleReconnect() {
-    if (!tenant) return;
-    setReconnecting(true);
+  async function handleReset() {
+    if (!tenant || actionLock.current) return;
+    actionLock.current = true;
+    setActionInProgress('resetting');
+    setReconnectError(null);
     try {
-      const res = await reconnectSession(tenant.tenantId);
+      const res = await resetSession(tenant.tenantId);
       if (res.success) {
-        if (res.data?.status === 'active') { setLocalStep('active'); session.refresh(); }
-        else if (res.data?.flowId) { setFlowId(res.data.flowId); setLocalStep('capturing'); }
-      } else { alert(res.error || 'Erro ao reconectar'); }
-    } finally { setReconnecting(false); }
+        setLocalStep('phone');
+        setFlowId(null);
+        autoReconnectAttempted.current = true;
+        session.refresh();
+      }
+    } finally {
+      setActionInProgress(null);
+      actionLock.current = false;
+    }
   }
 
   if (authLoading || session.loading) {
@@ -99,6 +140,10 @@ export default function ConnectionPage() {
   if (!tenant) return <AuthScreen />;
 
   const effectiveFlowId = flowId ?? session.flowId;
+  const showSetupInline = !['active', 'disconnected'].includes(effectiveStep);
+  const showDisconnectedWithData = effectiveStep === 'disconnected' && (session.hasSession || session.hasCredentials);
+  const showDisconnectedEmpty = effectiveStep === 'disconnected' && !session.hasSession && !session.hasCredentials;
+  const isAnyAction = !!actionInProgress;
 
   return (
     <AppShell activeTab="connection">
@@ -120,117 +165,96 @@ export default function ConnectionPage() {
               <p style={s.channelDesc}>Assistente IA para mensagens privadas</p>
             </div>
           </div>
-          <div style={s.statusPill(step === 'active')}>
-            <span style={s.statusPillDot(step === 'active')} />
-            {step === 'active' ? 'Online'
-              : step === 'disconnected'
-                ? (reconnecting ? 'Reconectando...' : 'Offline')
-                : 'Não configurado'}
-          </div>
+          <StatusBadge step={effectiveStep} actionInProgress={actionInProgress} workerBusy={session.workerBusy} />
         </div>
 
-        {(step === 'active' || (step === 'disconnected' && session.hasSession)) && (
+        {session.workerBusy && !showSetupInline && effectiveStep !== 'active' && (
+          <div style={s.workerBanner}>
+            <div style={s.workerDot} />
+            <span style={s.workerText}>{session.workerAction || 'Processando...'}</span>
+          </div>
+        )}
+
+        {effectiveStep === 'active' && (
           <div style={s.sessionDetails}>
             <div style={s.detailGrid}>
-              <div style={s.detailItem}>
-                <span style={s.detailLabel}>Telefone</span>
-                <span style={s.detailValue}>{session.phone ? formatPhone(session.phone) : '—'}</span>
-              </div>
-              <div style={s.detailItem}>
-                <span style={s.detailLabel}>Status</span>
-                <span style={{ ...s.detailValue, color: step === 'active' ? 'var(--green)' : 'var(--amber)' }}>
-                  {step === 'active'
-                    ? 'Conectado e respondendo'
-                    : reconnecting
-                      ? 'Tentando reconectar...'
-                      : 'Sessão salva, não respondendo'}
-                </span>
-              </div>
-              <div style={s.detailItem}>
-                <span style={s.detailLabel}>Sessão</span>
-                <span style={s.detailValue}>{session.hasSession ? 'Salva no servidor' : 'Não salva'}</span>
-              </div>
+              <DetailItem label="Telefone" value={session.phone ? formatPhone(session.phone) : '—'} />
+              <DetailItem label="Status" value="Conectado e respondendo" color="var(--green)" />
+              <DetailItem label="API" value="Configurada" />
             </div>
-
             <div style={s.actionRow}>
-              {step === 'active' ? (
-                <button onClick={handleDisconnect} style={s.dangerBtn}>Desconectar</button>
-              ) : (
-                <>
-                  <button onClick={handleReconnect} disabled={reconnecting} style={{ ...s.primaryBtn, opacity: reconnecting ? 0.6 : 1 }}>
-                    {reconnecting ? 'Reconectando...' : 'Reconectar'}
-                  </button>
-                  <button onClick={() => { setLocalStep('phone'); setFlowId(null); }} style={s.ghostBtn}>
-                    Configurar do zero
-                  </button>
-                </>
-              )}
+              <button onClick={handleDisconnect} disabled={isAnyAction} style={{ ...s.dangerBtn, opacity: isAnyAction ? 0.5 : 1 }}>
+                {actionInProgress === 'disconnecting' ? 'Desconectando...' : 'Desconectar'}
+              </button>
             </div>
           </div>
         )}
 
-        {!['active', 'disconnected'].includes(step) && (
+        {showDisconnectedWithData && (
+          <div style={s.sessionDetails}>
+            <div style={s.detailGrid}>
+              <DetailItem label="Telefone" value={session.phone ? formatPhone(session.phone) : '—'} />
+              <DetailItem
+                label="Status"
+                value={actionInProgress === 'reconnecting' ? 'Reconectando...' : 'Desconectado'}
+                color={actionInProgress === 'reconnecting' ? 'var(--accent)' : 'var(--amber)'}
+              />
+              <DetailItem label="Sessão" value={session.hasSession ? 'Salva' : 'Credenciais salvas'} />
+            </div>
+
+            {session.errorMessage && !actionInProgress && (
+              <div style={s.errorBanner}><span style={s.errorText}>{session.errorMessage}</span></div>
+            )}
+            {reconnectError && (
+              <div style={s.errorBanner}><span style={s.errorText}>{reconnectError}</span></div>
+            )}
+
+            <div style={s.actionRow}>
+              <button onClick={() => doReconnect()} disabled={isAnyAction}
+                style={{ ...s.primaryBtn, opacity: isAnyAction ? 0.5 : 1, cursor: isAnyAction ? 'not-allowed' : 'pointer' }}>
+                {actionInProgress === 'reconnecting' ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={s.btnSpinner} /> Reconectando...
+                  </span>
+                ) : 'Reconectar'}
+              </button>
+              <button onClick={handleReset} disabled={isAnyAction}
+                style={{ ...s.ghostBtn, opacity: isAnyAction ? 0.5 : 1, color: isAnyAction ? 'var(--text-tertiary)' : 'var(--red)' }}>
+                {actionInProgress === 'resetting' ? 'Limpando...' : 'Configurar do zero'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showSetupInline && (
           <div style={s.setupArea}>
             <TelegramSetup
               tenantId={tenant.tenantId}
-              currentStep={step}
+              currentStep={effectiveStep}
               flowId={effectiveFlowId}
-              onStepChange={s2 => { setLocalStep(s2); if (s2 === 'active') session.refresh(); }}
+              onStepChange={handleStepChange}
               onFlowCreated={setFlowId}
             />
           </div>
         )}
 
-        {step === 'disconnected' && !session.hasSession && (
+        {showDisconnectedEmpty && (
           <div style={s.setupArea}>
             <TelegramSetup
               tenantId={tenant.tenantId}
               currentStep="phone"
               flowId={null}
-              onStepChange={s2 => setLocalStep(s2)}
+              onStepChange={handleStepChange}
               onFlowCreated={setFlowId}
             />
           </div>
         )}
       </div>
 
-      <div style={s.channelCardDisabled}>
-        <div style={s.channelHeader}>
-          <div style={s.channelLeft}>
-            <div style={{ ...s.channelIcon, background: '#25D366', opacity: 0.4 }}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z" />
-              </svg>
-            </div>
-            <div style={{ opacity: 0.5 }}>
-              <h3 style={s.channelName}>WhatsApp</h3>
-              <p style={s.channelDesc}>Integração com WhatsApp Business</p>
-            </div>
-          </div>
-          <span style={s.comingSoon}>Em breve</span>
-        </div>
-      </div>
+      <ChannelPlaceholder name="WhatsApp" desc="Integração com WhatsApp Business" color="#25D366" />
+      <ChannelPlaceholder name="Instagram" desc="Respostas automáticas no Direct" color="linear-gradient(135deg, #833AB4, #E1306C, #F77737)" />
 
-      <div style={s.channelCardDisabled}>
-        <div style={s.channelHeader}>
-          <div style={s.channelLeft}>
-            <div style={{ ...s.channelIcon, background: 'linear-gradient(135deg, #833AB4, #E1306C, #F77737)', opacity: 0.4 }}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
-                <path d="M16 11.37A4 4 0 1112.63 8 4 4 0 0116 11.37z" />
-                <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
-              </svg>
-            </div>
-            <div style={{ opacity: 0.5 }}>
-              <h3 style={s.channelName}>Instagram</h3>
-              <p style={s.channelDesc}>Respostas automáticas no Direct</p>
-            </div>
-          </div>
-          <span style={s.comingSoon}>Em breve</span>
-        </div>
-      </div>
-
-      {step === 'active' && (
+      {effectiveStep === 'active' && (
         <div style={s.section}>
           <h2 style={s.sectionTitle}>Contatos recentes</h2>
           <ContactsList tenantId={tenant.tenantId} />
@@ -240,33 +264,77 @@ export default function ConnectionPage() {
   );
 }
 
-const s = {
-  loadingPage: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', minHeight: '100vh', gap: 8 },
-  spinner: { width: 28, height: 28, borderWidth: 3, borderStyle: 'solid' as const, borderColor: 'var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
+function StatusBadge({ step, actionInProgress, workerBusy }: { step: string; actionInProgress: string | null; workerBusy: boolean }) {
+  let label = 'Não configurado';
+  let active = false;
+
+  if (actionInProgress === 'reconnecting') label = 'Reconectando...';
+  else if (actionInProgress === 'resetting') label = 'Limpando...';
+  else if (step === 'active') { label = 'Online'; active = true; }
+  else if (step === 'disconnected') label = 'Offline';
+  else if (['capturing', 'reconnecting'].includes(step) || workerBusy) label = 'Conectando...';
+  else if (['phone', 'portal_code', 'session_code', 'session_2fa'].includes(step)) label = 'Configurando';
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: active ? 'var(--green-light)' : 'var(--bg-muted)', color: active ? 'var(--green)' : 'var(--text-secondary)' }}>
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: active ? 'var(--green)' : 'var(--text-tertiary)', animation: active ? 'pulse 2s infinite' : 'none' }} />
+      {label}
+    </div>
+  );
+}
+
+function DetailItem({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 3 }}>
+      <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)', textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: color || 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{value}</span>
+    </div>
+  );
+}
+
+function ChannelPlaceholder({ name, desc, color }: { name: string; desc: string; color: string }) {
+  return (
+    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', marginBottom: 12, opacity: 0.7 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, opacity: 0.5 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 12, background: color, opacity: 0.4 }} />
+          <div>
+            <h3 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 2px' }}>{name}</h3>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>{desc}</p>
+          </div>
+        </div>
+        <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)', background: 'var(--bg-muted)', padding: '4px 10px', borderRadius: 10 }}>Em breve</span>
+      </div>
+    </div>
+  );
+}
+
+const s: Record<string, React.CSSProperties> = {
+  loadingPage: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', gap: 8 },
+  spinner: { width: 28, height: 28, borderWidth: 3, borderStyle: 'solid', borderColor: 'var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
   loadingText: { fontSize: 13, color: 'var(--text-secondary)' },
-  pageHeader: { marginBottom: 28 } as React.CSSProperties,
-  pageTitle: { fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px', letterSpacing: '-0.02em' } as React.CSSProperties,
-  pageSubtitle: { fontSize: 14, color: 'var(--text-secondary)', margin: 0 } as React.CSSProperties,
-  channelCard: { background: 'var(--bg-card)', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' as const, marginBottom: 12, boxShadow: 'var(--shadow-sm)' } as React.CSSProperties,
-  channelCardDisabled: { background: 'var(--bg-card)', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--border)', borderRadius: 'var(--radius-lg)', marginBottom: 12, opacity: 0.7 } as React.CSSProperties,
-  channelHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px', gap: 16 } as React.CSSProperties,
-  channelLeft: { display: 'flex', alignItems: 'center', gap: 14 } as React.CSSProperties,
-  channelIcon: { width: 44, height: 44, borderRadius: 12, background: '#2AABEE', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 } as React.CSSProperties,
-  channelName: { fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 2px' } as React.CSSProperties,
-  channelDesc: { fontSize: 12, color: 'var(--text-secondary)', margin: 0 } as React.CSSProperties,
-  statusPill: (active: boolean): React.CSSProperties => ({ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: active ? 'var(--green-light)' : 'var(--bg-muted)', color: active ? 'var(--green)' : 'var(--text-secondary)' }),
-  statusPillDot: (active: boolean): React.CSSProperties => ({ width: 7, height: 7, borderRadius: '50%', background: active ? 'var(--green)' : 'var(--text-tertiary)', animation: active ? 'pulse 2s infinite' : 'none' }),
-  sessionDetails: { padding: '0 24px 20px', borderTopWidth: 1, borderTopStyle: 'solid' as const, borderTopColor: 'var(--border-light)', marginTop: -4 } as React.CSSProperties,
-  detailGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, padding: '16px 0' } as React.CSSProperties,
-  detailItem: { display: 'flex', flexDirection: 'column' as const, gap: 3 } as React.CSSProperties,
-  detailLabel: { fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)', textTransform: 'uppercase' as const, letterSpacing: '0.05em' } as React.CSSProperties,
-  detailValue: { fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' } as React.CSSProperties,
-  actionRow: { display: 'flex', gap: 10, paddingTop: 4 } as React.CSSProperties,
-  primaryBtn: { padding: '9px 20px', fontSize: 13, fontWeight: 600, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer' } as React.CSSProperties,
-  dangerBtn: { padding: '9px 20px', fontSize: 13, fontWeight: 500, background: 'var(--bg-card)', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--red)', borderRadius: 'var(--radius-sm)', color: 'var(--red)', cursor: 'pointer' } as React.CSSProperties,
-  ghostBtn: { padding: '9px 20px', fontSize: 13, fontWeight: 500, background: 'none', borderWidth: 1, borderStyle: 'solid' as const, borderColor: 'var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer' } as React.CSSProperties,
-  comingSoon: { fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)', background: 'var(--bg-muted)', padding: '4px 10px', borderRadius: 10 } as React.CSSProperties,
-  setupArea: { padding: '0 24px 24px', borderTopWidth: 1, borderTopStyle: 'solid' as const, borderTopColor: 'var(--border-light)' } as React.CSSProperties,
-  section: { marginTop: 28 } as React.CSSProperties,
-  sectionTitle: { fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 16px' } as React.CSSProperties,
+  pageHeader: { marginBottom: 28 },
+  pageTitle: { fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px', letterSpacing: '-0.02em' },
+  pageSubtitle: { fontSize: 14, color: 'var(--text-secondary)', margin: 0 },
+  channelCard: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 12, boxShadow: 'var(--shadow-sm)' },
+  channelHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px', gap: 16 },
+  channelLeft: { display: 'flex', alignItems: 'center', gap: 14 },
+  channelIcon: { width: 44, height: 44, borderRadius: 12, background: '#2AABEE', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  channelName: { fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 2px' },
+  channelDesc: { fontSize: 12, color: 'var(--text-secondary)', margin: 0 },
+  workerBanner: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 24px', background: '#f0f7ff', borderTop: '1px solid #dbeafe' },
+  workerDot: { width: 6, height: 6, borderRadius: '50%', background: '#2563eb', animation: 'pulse 1.5s infinite', flexShrink: 0 },
+  workerText: { fontSize: 12, color: '#1e40af', fontWeight: 500 },
+  sessionDetails: { padding: '0 24px 20px', borderTop: '1px solid var(--border-light)', marginTop: -4 },
+  detailGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, padding: '16px 0' },
+  errorBanner: { padding: '10px 14px', background: 'var(--red-light)', borderRadius: 'var(--radius-sm)', marginBottom: 12 },
+  errorText: { fontSize: 12, color: 'var(--red)', lineHeight: 1.4 },
+  actionRow: { display: 'flex', gap: 10, paddingTop: 4 },
+  primaryBtn: { padding: '9px 20px', fontSize: 13, fontWeight: 600, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)' },
+  dangerBtn: { padding: '9px 20px', fontSize: 13, fontWeight: 500, background: 'var(--bg-card)', border: '1px solid var(--red)', borderRadius: 'var(--radius-sm)', color: 'var(--red)', cursor: 'pointer' },
+  ghostBtn: { padding: '9px 20px', fontSize: 13, fontWeight: 500, background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' },
+  setupArea: { padding: '0 24px 24px', borderTop: '1px solid var(--border-light)' },
+  section: { marginTop: 28 },
+  sectionTitle: { fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 16px' },
+  btnSpinner: { display: 'inline-block', width: 14, height: 14, borderWidth: 2, borderStyle: 'solid', borderColor: 'rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.6s linear infinite' },
 };
