@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTenant } from '@/core/lib/tenant-context';
+import { formatPhone } from '@/core/lib/utils';
 import { AuthScreen } from '@/modules/telegram/components/AuthScreen';
 import { AppShell } from '@/modules/telegram/components/AppShell';
 import { TelegramSetup } from '@/modules/telegram/components/TelegramSetup';
@@ -10,14 +11,6 @@ import { ContactsList } from '@/modules/telegram/components/ContactsList';
 import { useTelegramSession } from '@/modules/telegram/hooks/useTelegramSession';
 import { disconnectSession, reconnectSession, resetSession } from '@/modules/telegram/api';
 import type { OnboardingStep } from '@/modules/telegram/types';
-
-function formatPhone(phone: string): string {
-  if (phone.startsWith('+55') && phone.length >= 13) {
-    const d = phone.slice(3);
-    return `+55 (${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
-  }
-  return phone;
-}
 
 export default function ConnectionPage() {
   const { tenant, loading: authLoading } = useTenant();
@@ -28,33 +21,18 @@ export default function ConnectionPage() {
 
   const step = localStep ?? 'phone';
   const isCapturing = ['capturing', 'reconnecting'].includes(step);
-
   const session = useTelegramSession(tenant?.tenantId, isCapturing);
-
   const effectiveStep = localStep ?? session.step;
-
   const autoReconnectAttempted = useRef(false);
   const actionLock = useRef(false);
 
   useEffect(() => {
-    if (
-      !autoReconnectAttempted.current &&
-      !session.loading &&
-      session.step === 'disconnected' &&
-      (session.hasSession || session.hasCredentials) &&
-      tenant?.tenantId &&
-      !localStep
-    ) {
+    if (!autoReconnectAttempted.current && !session.loading && session.step === 'disconnected' &&
+      (session.hasSession || session.hasCredentials) && tenant?.tenantId && !localStep) {
       autoReconnectAttempted.current = true;
       doReconnect(true);
     }
   }, [session.loading, session.step, session.hasSession, session.hasCredentials, tenant?.tenantId, localStep]);
-
-  useEffect(() => {
-    if (!localStep && session.step) {
-      // sync
-    }
-  }, [session.step, localStep]);
 
   const doReconnect = useCallback(async (isAuto = false) => {
     if (!tenant || actionLock.current) return;
@@ -64,32 +42,20 @@ export default function ConnectionPage() {
     try {
       const res = await reconnectSession(tenant.tenantId);
       if (res.success) {
-        if (res.data?.status === 'active') {
-          setLocalStep('active');
-          session.refresh();
-        } else if (res.data?.flowId) {
+        if (res.data?.status === 'active') { setLocalStep('active'); session.refresh(); }
+        else if (res.data?.flowId) {
           setFlowId(res.data.flowId);
-          const nextStep = res.data.status === 'reconnecting' ? 'reconnecting' : 'capturing';
-          setLocalStep(nextStep as OnboardingStep);
+          setLocalStep((res.data.status === 'reconnecting' ? 'reconnecting' : 'capturing') as OnboardingStep);
         }
-      } else if (!isAuto) {
-        setReconnectError(res.error || 'Erro ao reconectar.');
-      }
-    } catch {
-      if (!isAuto) setReconnectError('Erro de conexão.');
-    } finally {
-      setActionInProgress(null);
-      actionLock.current = false;
-    }
+      } else if (!isAuto) setReconnectError(res.error || 'Erro ao reconectar.');
+    } catch { if (!isAuto) setReconnectError('Erro de conexão.'); }
+    finally { setActionInProgress(null); actionLock.current = false; }
   }, [tenant, session]);
 
   function handleStepChange(newStep: OnboardingStep) {
     setReconnectError(null);
     setLocalStep(newStep);
-    if (newStep === 'active' || newStep === 'disconnected') {
-      setFlowId(null);
-      session.refresh();
-    }
+    if (newStep === 'active' || newStep === 'disconnected') { setFlowId(null); session.refresh(); }
   }
 
   async function handleDisconnect() {
@@ -98,15 +64,8 @@ export default function ConnectionPage() {
     setActionInProgress('disconnecting');
     try {
       const res = await disconnectSession(tenant.tenantId);
-      if (res.success) {
-        setLocalStep('disconnected');
-        setFlowId(null);
-        session.refresh();
-      }
-    } finally {
-      setActionInProgress(null);
-      actionLock.current = false;
-    }
+      if (res.success) { setLocalStep('disconnected'); setFlowId(null); session.refresh(); }
+    } finally { setActionInProgress(null); actionLock.current = false; }
   }
 
   async function handleReset() {
@@ -116,27 +75,13 @@ export default function ConnectionPage() {
     setReconnectError(null);
     try {
       const res = await resetSession(tenant.tenantId);
-      if (res.success) {
-        setLocalStep('phone');
-        setFlowId(null);
-        autoReconnectAttempted.current = true;
-        session.refresh();
-      }
-    } finally {
-      setActionInProgress(null);
-      actionLock.current = false;
-    }
+      if (res.success) { setLocalStep('phone'); setFlowId(null); autoReconnectAttempted.current = true; session.refresh(); }
+    } finally { setActionInProgress(null); actionLock.current = false; }
   }
 
   if (authLoading || session.loading) {
-    return (
-      <div style={s.loadingPage}>
-        <div style={s.spinner} />
-        <p style={s.loadingText}>Carregando...</p>
-      </div>
-    );
+    return (<div style={s.loadingPage}><div style={s.spinner} /><p style={s.loadingText}>Carregando...</p></div>);
   }
-
   if (!tenant) return <AuthScreen />;
 
   const effectiveFlowId = flowId ?? session.flowId;
@@ -169,10 +114,7 @@ export default function ConnectionPage() {
         </div>
 
         {session.workerBusy && !showSetupInline && effectiveStep !== 'active' && (
-          <div style={s.workerBanner}>
-            <div style={s.workerDot} />
-            <span style={s.workerText}>{session.workerAction || 'Processando...'}</span>
-          </div>
+          <div style={s.workerBanner}><div style={s.workerDot} /><span style={s.workerText}>{session.workerAction || 'Processando...'}</span></div>
         )}
 
         {effectiveStep === 'active' && (
@@ -194,32 +136,16 @@ export default function ConnectionPage() {
           <div style={s.sessionDetails}>
             <div style={s.detailGrid}>
               <DetailItem label="Telefone" value={session.phone ? formatPhone(session.phone) : '—'} />
-              <DetailItem
-                label="Status"
-                value={actionInProgress === 'reconnecting' ? 'Reconectando...' : 'Desconectado'}
-                color={actionInProgress === 'reconnecting' ? 'var(--accent)' : 'var(--amber)'}
-              />
+              <DetailItem label="Status" value={actionInProgress === 'reconnecting' ? 'Reconectando...' : 'Desconectado'} color={actionInProgress === 'reconnecting' ? 'var(--accent)' : 'var(--amber)'} />
               <DetailItem label="Sessão" value={session.hasSession ? 'Salva' : 'Credenciais salvas'} />
             </div>
-
-            {session.errorMessage && !actionInProgress && (
-              <div style={s.errorBanner}><span style={s.errorText}>{session.errorMessage}</span></div>
-            )}
-            {reconnectError && (
-              <div style={s.errorBanner}><span style={s.errorText}>{reconnectError}</span></div>
-            )}
-
+            {session.errorMessage && !actionInProgress && (<div style={s.errorBanner}><span style={s.errorText}>{session.errorMessage}</span></div>)}
+            {reconnectError && (<div style={s.errorBanner}><span style={s.errorText}>{reconnectError}</span></div>)}
             <div style={s.actionRow}>
-              <button onClick={() => doReconnect()} disabled={isAnyAction}
-                style={{ ...s.primaryBtn, opacity: isAnyAction ? 0.5 : 1, cursor: isAnyAction ? 'not-allowed' : 'pointer' }}>
-                {actionInProgress === 'reconnecting' ? (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={s.btnSpinner} /> Reconectando...
-                  </span>
-                ) : 'Reconectar'}
+              <button onClick={() => doReconnect()} disabled={isAnyAction} style={{ ...s.primaryBtn, opacity: isAnyAction ? 0.5 : 1, cursor: isAnyAction ? 'not-allowed' : 'pointer' }}>
+                {actionInProgress === 'reconnecting' ? (<span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={s.btnSpinner} /> Reconectando...</span>) : 'Reconectar'}
               </button>
-              <button onClick={handleReset} disabled={isAnyAction}
-                style={{ ...s.ghostBtn, opacity: isAnyAction ? 0.5 : 1, color: isAnyAction ? 'var(--text-tertiary)' : 'var(--red)' }}>
+              <button onClick={handleReset} disabled={isAnyAction} style={{ ...s.ghostBtn, opacity: isAnyAction ? 0.5 : 1, color: isAnyAction ? 'var(--text-tertiary)' : 'var(--red)' }}>
                 {actionInProgress === 'resetting' ? 'Limpando...' : 'Configurar do zero'}
               </button>
             </div>
@@ -228,25 +154,13 @@ export default function ConnectionPage() {
 
         {showSetupInline && (
           <div style={s.setupArea}>
-            <TelegramSetup
-              tenantId={tenant.tenantId}
-              currentStep={effectiveStep}
-              flowId={effectiveFlowId}
-              onStepChange={handleStepChange}
-              onFlowCreated={setFlowId}
-            />
+            <TelegramSetup tenantId={tenant.tenantId} currentStep={effectiveStep} flowId={effectiveFlowId} onStepChange={handleStepChange} onFlowCreated={setFlowId} />
           </div>
         )}
 
         {showDisconnectedEmpty && (
           <div style={s.setupArea}>
-            <TelegramSetup
-              tenantId={tenant.tenantId}
-              currentStep="phone"
-              flowId={null}
-              onStepChange={handleStepChange}
-              onFlowCreated={setFlowId}
-            />
+            <TelegramSetup tenantId={tenant.tenantId} currentStep="phone" flowId={null} onStepChange={handleStepChange} onFlowCreated={setFlowId} />
           </div>
         )}
       </div>
@@ -255,10 +169,7 @@ export default function ConnectionPage() {
       <ChannelPlaceholder name="Instagram" desc="Respostas automáticas no Direct" color="linear-gradient(135deg, #833AB4, #E1306C, #F77737)" />
 
       {effectiveStep === 'active' && (
-        <div style={s.section}>
-          <h2 style={s.sectionTitle}>Contatos recentes</h2>
-          <ContactsList tenantId={tenant.tenantId} />
-        </div>
+        <div style={s.section}><h2 style={s.sectionTitle}>Contatos recentes</h2><ContactsList tenantId={tenant.tenantId} /></div>
       )}
     </AppShell>
   );
@@ -267,14 +178,12 @@ export default function ConnectionPage() {
 function StatusBadge({ step, actionInProgress, workerBusy }: { step: string; actionInProgress: string | null; workerBusy: boolean }) {
   let label = 'Não configurado';
   let active = false;
-
   if (actionInProgress === 'reconnecting') label = 'Reconectando...';
   else if (actionInProgress === 'resetting') label = 'Limpando...';
   else if (step === 'active') { label = 'Online'; active = true; }
   else if (step === 'disconnected') label = 'Offline';
   else if (['capturing', 'reconnecting'].includes(step) || workerBusy) label = 'Conectando...';
   else if (['phone', 'portal_code', 'session_code', 'session_2fa'].includes(step)) label = 'Configurando';
-
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: active ? 'var(--green-light)' : 'var(--bg-muted)', color: active ? 'var(--green)' : 'var(--text-secondary)' }}>
       <span style={{ width: 7, height: 7, borderRadius: '50%', background: active ? 'var(--green)' : 'var(--text-tertiary)', animation: active ? 'pulse 2s infinite' : 'none' }} />

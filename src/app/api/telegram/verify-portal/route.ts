@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/core/lib/db';
 import { getFlowState, setFlowState, saveStelToken, publishToWorker, CHANNELS } from '@/core/lib/redis';
 import { createLogger } from '@/core/lib/logger';
+import { extractErrorCause } from '@/core/lib/utils';
 import { randomUUID } from 'crypto';
 
 const log = createLogger('telegram/verify-portal');
@@ -17,7 +18,7 @@ async function safeFetch(reqId: string, url: string, options: RequestInit & { ti
       return { ok: true as const, res };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const cause = err instanceof Error && 'cause' in err ? String((err as Record<string, unknown>).cause) : null;
+      const cause = extractErrorCause(err);
       log.warn(`[${reqId}] Fetch ${url} tentativa ${attempt}/${MAX_RETRIES}`, { error: msg, cause });
       if (attempt < MAX_RETRIES) {
         await new Promise(r => setTimeout(r, RETRY_DELAY * attempt));

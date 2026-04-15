@@ -107,3 +107,32 @@ export interface ApiResponse<T = unknown> {
   data?: T;
   error?: string;
 }
+
+// ═══════════════════════════════════════════════════════════
+// Shared error types (DRY — used by db.ts, logger.ts, routes)
+// ═══════════════════════════════════════════════════════════
+
+export interface NetworkError extends NodeJS.ErrnoException {
+  address?: string;
+  port?: number;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Shared pagination types (DRY — used by contacts, messages)
+// ═══════════════════════════════════════════════════════════
+
+export interface PaginationParams {
+  page: number;
+  limit: number;
+  offset: number;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}

@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { useTenant } from '@/core/lib/tenant-context';
+import { formatPhone } from '@/core/lib/utils';
 import { useTelegramSession } from '@/modules/telegram/hooks/useTelegramSession';
 import { useAiConfig } from '@/modules/telegram/hooks/useAiConfig';
 import { ProfileDropdown } from './ProfileDropdown';
@@ -9,10 +10,7 @@ import { ProfileModal } from './ProfileModal';
 
 type TabKey = 'connection' | 'assistant' | 'contacts' | 'services' | 'orders' | 'broadcast' | 'analytics';
 
-interface Props {
-  activeTab: TabKey;
-  children: ReactNode;
-}
+interface Props { activeTab: TabKey; children: ReactNode; }
 
 const TABS: { key: TabKey; label: string; href: string; requiresAi: boolean }[] = [
   { key: 'connection', label: 'Conexão', href: '/telegram/connection', requiresAi: false },
@@ -24,14 +22,6 @@ const TABS: { key: TabKey; label: string; href: string; requiresAi: boolean }[] 
   { key: 'analytics', label: 'Analytics', href: '/telegram/analytics', requiresAi: true },
 ];
 
-function formatPhone(phone: string): string {
-  if (phone.startsWith('+55') && phone.length >= 13) {
-    const d = phone.slice(3);
-    return `+55 (${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
-  }
-  return phone;
-}
-
 function StatusDot({ status }: { status: 'active' | 'disconnected' | 'setup' }) {
   const colors = {
     active: { bg: 'var(--green)', shadow: 'rgba(5, 150, 105, 0.3)' },
@@ -39,33 +29,11 @@ function StatusDot({ status }: { status: 'active' | 'disconnected' | 'setup' }) 
     setup: { bg: 'var(--text-tertiary)', shadow: 'rgba(156, 163, 175, 0.3)' },
   };
   const c = colors[status];
-  return (
-    <span style={{
-      display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-      background: c.bg, boxShadow: `0 0 0 3px ${c.shadow}`, flexShrink: 0,
-      animation: status === 'active' ? 'pulse 2s infinite' : 'none',
-    }} />
-  );
+  return <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: c.bg, boxShadow: `0 0 0 3px ${c.shadow}`, flexShrink: 0, animation: status === 'active' ? 'pulse 2s infinite' : 'none' }} />;
 }
 
 function tabStyle(active: boolean, locked: boolean): React.CSSProperties {
-  return {
-    padding: '12px 20px',
-    fontSize: 13,
-    fontWeight: active ? 600 : 500,
-    color: locked ? 'var(--text-tertiary)' : active ? 'var(--accent)' : 'var(--text-secondary)',
-    textDecoration: 'none',
-    borderBottomWidth: 2,
-    borderBottomStyle: 'solid',
-    borderBottomColor: active ? 'var(--accent)' : 'transparent',
-    transition: 'color 0.15s',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    opacity: locked ? 0.5 : 1,
-    pointerEvents: locked ? 'none' : 'auto',
-    cursor: locked ? 'not-allowed' : 'pointer',
-  };
+  return { padding: '12px 20px', fontSize: 13, fontWeight: active ? 600 : 500, color: locked ? 'var(--text-tertiary)' : active ? 'var(--accent)' : 'var(--text-secondary)', textDecoration: 'none', borderBottomWidth: 2, borderBottomStyle: 'solid', borderBottomColor: active ? 'var(--accent)' : 'transparent', transition: 'color 0.15s', display: 'flex', alignItems: 'center', gap: 6, opacity: locked ? 0.5 : 1, pointerEvents: locked ? 'none' : 'auto', cursor: locked ? 'not-allowed' : 'pointer' };
 }
 
 export function AppShell({ activeTab, children }: Props) {
@@ -74,27 +42,15 @@ export function AppShell({ activeTab, children }: Props) {
   const aiConfig = useAiConfig(tenant?.tenantId);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
 
-  const connectionStatus = session.step === 'active'
-    ? 'active' : session.step === 'disconnected'
-    ? 'disconnected' : 'setup';
-
-  const statusLabel = {
-    active: 'Conectado',
-    disconnected: 'Desconectado',
-    setup: 'Não configurado',
-  }[connectionStatus];
-
+  const connectionStatus = session.step === 'active' ? 'active' : session.step === 'disconnected' ? 'disconnected' : 'setup';
+  const statusLabel = { active: 'Conectado', disconnected: 'Desconectado', setup: 'Não configurado' }[connectionStatus];
   const isAiConfigured = aiConfig.isConfigured;
 
   return (
     <div style={st.shell}>
       <header style={st.topbar}>
         <div style={st.topbarInner}>
-          <a href="/telegram/connection" style={st.brand}>
-            <div style={st.logoMark}>B</div>
-            <span style={st.logoName}>BotFans</span>
-          </a>
-
+          <a href="/telegram/connection" style={st.brand}><div style={st.logoMark}>B</div><span style={st.logoName}>BotFans</span></a>
           <div style={st.topbarRight}>
             <a href="/telegram/connection" style={st.sessionChip} title="Ver detalhes da conexão">
               <StatusDot status={connectionStatus} />
@@ -103,55 +59,34 @@ export function AppShell({ activeTab, children }: Props) {
                 {session.phone && <span style={st.sessionChipPhone}>{formatPhone(session.phone)}</span>}
               </div>
             </a>
-
             <div style={st.divider} />
-
             <ProfileDropdown onOpenSettings={() => setProfileModalOpen(true)} />
           </div>
         </div>
       </header>
-
       <nav style={st.tabBar}>
         <div style={st.tabBarInner}>
           {TABS.map(tab => {
             const locked = tab.requiresAi && !isAiConfigured;
             return (
-              <a
-                key={tab.key}
-                href={locked ? undefined : tab.href}
-                style={tabStyle(tab.key === activeTab, locked)}
-                title={locked ? 'Configure a assistente IA primeiro' : undefined}
-                onClick={locked ? (e) => e.preventDefault() : undefined}
-              >
+              <a key={tab.key} href={locked ? undefined : tab.href} style={tabStyle(tab.key === activeTab, locked)}
+                title={locked ? 'Configure a assistente IA primeiro' : undefined} onClick={locked ? (e) => e.preventDefault() : undefined}>
                 {tab.label}
                 {locked && <span style={st.lockIcon}>🔒</span>}
-                {tab.key === 'assistant' && !isAiConfigured && !aiConfig.loading && (
-                  <span style={st.configDot} />
-                )}
+                {tab.key === 'assistant' && !isAiConfigured && !aiConfig.loading && <span style={st.configDot} />}
               </a>
             );
           })}
         </div>
       </nav>
-
-      {/* Banner: IA não configurada */}
       {!aiConfig.loading && !isAiConfigured && activeTab !== 'assistant' && activeTab !== 'connection' && (
-        <div style={st.aiGateBanner}>
-          <div style={st.aiGateBannerInner}>
-            <span style={st.aiGateIcon}>✦</span>
-            <div style={st.aiGateText}>
-              <p style={st.aiGateTitle}>Assistente IA não configurada</p>
-              <p style={st.aiGateDesc}>Configure sua assistente para desbloquear esta funcionalidade.</p>
-            </div>
-            <a href="/telegram/assistant" style={st.aiGateBtn}>Configurar agora</a>
-          </div>
-        </div>
+        <div style={st.aiGateBanner}><div style={st.aiGateBannerInner}>
+          <span style={st.aiGateIcon}>✦</span>
+          <div style={st.aiGateText}><p style={st.aiGateTitle}>Assistente IA não configurada</p><p style={st.aiGateDesc}>Configure sua assistente para desbloquear esta funcionalidade.</p></div>
+          <a href="/telegram/assistant" style={st.aiGateBtn}>Configurar agora</a>
+        </div></div>
       )}
-
-      <main style={st.content}>
-        <div style={st.contentInner}>{children}</div>
-      </main>
-
+      <main style={st.content}><div style={st.contentInner}>{children}</div></main>
       <ProfileModal open={profileModalOpen} onClose={() => setProfileModalOpen(false)} />
     </div>
   );
@@ -159,32 +94,21 @@ export function AppShell({ activeTab, children }: Props) {
 
 const st: Record<string, React.CSSProperties> = {
   shell: { minHeight: '100vh', display: 'flex', flexDirection: 'column' },
-
   topbar: { background: 'var(--bg-card)', borderBottomWidth: 1, borderBottomStyle: 'solid', borderBottomColor: 'var(--border)', position: 'sticky', top: 0, zIndex: 50 },
   topbarInner: { maxWidth: 1120, margin: '0 auto', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-
   brand: { display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none' },
   logoMark: { width: 30, height: 30, borderRadius: 8, background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700 },
   logoName: { fontSize: 17, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em' },
-
   topbarRight: { display: 'flex', alignItems: 'center', gap: 16 },
-
-  sessionChip: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    padding: '6px 14px', background: 'var(--bg-muted)', borderRadius: 20,
-    textDecoration: 'none', cursor: 'pointer',
-  },
+  sessionChip: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'var(--bg-muted)', borderRadius: 20, textDecoration: 'none', cursor: 'pointer' },
   sessionChipText: { display: 'flex', flexDirection: 'column', lineHeight: 1.2 },
   sessionChipStatus: { fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' },
   sessionChipPhone: { fontSize: 10, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', letterSpacing: '0.01em' },
-
   divider: { width: 1, height: 24, background: 'var(--border)' },
-
   tabBar: { background: 'var(--bg-card)', borderBottomWidth: 1, borderBottomStyle: 'solid', borderBottomColor: 'var(--border)' },
   tabBarInner: { maxWidth: 1120, margin: '0 auto', padding: '0 32px', display: 'flex', gap: 0 },
   lockIcon: { fontSize: 10, opacity: 0.6 },
   configDot: { width: 6, height: 6, borderRadius: '50%', background: '#e8457a', animation: 'pulse 2s infinite' },
-
   aiGateBanner: { background: 'linear-gradient(135deg, #fdf2f8, #fce7f3)', borderBottom: '1px solid #f9a8d4' },
   aiGateBannerInner: { maxWidth: 1120, margin: '0 auto', padding: '12px 32px', display: 'flex', alignItems: 'center', gap: 14 },
   aiGateIcon: { fontSize: 20, flexShrink: 0 },
@@ -192,7 +116,6 @@ const st: Record<string, React.CSSProperties> = {
   aiGateTitle: { fontSize: 13, fontWeight: 600, color: '#9d174d', margin: '0 0 1px' },
   aiGateDesc: { fontSize: 12, color: '#be185d', margin: 0 },
   aiGateBtn: { padding: '7px 16px', fontSize: 12, fontWeight: 600, background: '#be185d', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', textDecoration: 'none', cursor: 'pointer', flexShrink: 0 },
-
   content: { flex: 1, padding: '28px 0' },
   contentInner: { maxWidth: 1120, margin: '0 auto', padding: '0 32px', animation: 'fadeIn 0.2s ease' },
 };

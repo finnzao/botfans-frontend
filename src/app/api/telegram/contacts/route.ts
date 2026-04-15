@@ -1,20 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/core/lib/db';
+import { requireTenantId, parsePagination, buildPaginationMeta, internalError } from '@/core/lib/utils';
 
 export async function GET(req: NextRequest) {
-  const tenantId = req.nextUrl.searchParams.get('tenantId');
-  if (!tenantId) {
-    return NextResponse.json({ success: false, error: 'tenantId obrigatório' }, { status: 400 });
-  }
+  const tenantIdOrError = requireTenantId(req);
+  if (tenantIdOrError instanceof NextResponse) return tenantIdOrError;
+  const tenantId = tenantIdOrError;
 
-  const tags = req.nextUrl.searchParams.get('tags');           // comma-separated, contatos que TÊM essas tags
-  const excludeTags = req.nextUrl.searchParams.get('excludeTags'); // comma-separated, contatos que NÃO TÊM
+  const tags = req.nextUrl.searchParams.get('tags');
+  const excludeTags = req.nextUrl.searchParams.get('excludeTags');
   const isNew = req.nextUrl.searchParams.get('isNew');
   const search = req.nextUrl.searchParams.get('search');
   const lastContactDays = req.nextUrl.searchParams.get('lastContactDays');
-  const page = parseInt(req.nextUrl.searchParams.get('page') || '1');
-  const limit = Math.min(parseInt(req.nextUrl.searchParams.get('limit') || '50'), 100);
-  const offset = (page - 1) * limit;
+  const { page, limit, offset } = parsePagination(req);
 
   try {
     const conditions: string[] = ['tenant_id = $1'];
@@ -91,11 +89,11 @@ export async function GET(req: NextRequest) {
           lastContactAt: row.last_contact_at,
         })),
         total,
-        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        pagination: buildPaginationMeta(page, limit, total),
       },
     });
   } catch (error) {
     console.error('Erro ao listar contatos:', error);
-    return NextResponse.json({ success: false, error: 'Erro interno' }, { status: 500 });
+    return internalError();
   }
 }

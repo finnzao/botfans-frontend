@@ -88,8 +88,6 @@ export async function publishToWorker(channel: string, data: Record<string, unkn
   }
 }
 
-// --- Session State ---
-
 export async function setSessionState(sessionId: string, state: Record<string, unknown>) {
   const key = `session:${sessionId}`;
   try {
@@ -111,8 +109,6 @@ export async function getSessionState(sessionId: string) {
     return null;
   }
 }
-
-// --- Flow State ---
 
 export async function setFlowState(flowId: string, state: Record<string, unknown>) {
   const key = `flow:${flowId}`;
@@ -162,8 +158,6 @@ export async function deleteFlowState(flowId: string) {
     log.warn('deleteFlowState falhou', { key, error: err });
   }
 }
-
-// --- Stel Token ---
 
 export async function saveStelToken(flowId: string, token: string) {
   const key = `stel:${flowId}`;

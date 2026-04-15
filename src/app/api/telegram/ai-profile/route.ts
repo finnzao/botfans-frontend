@@ -1,18 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/core/lib/db';
+import { requireTenantId, internalError } from '@/core/lib/utils';
 
-/**
- * GET /api/telegram/ai-profile?tenantId=xxx
- *   → Retorna o perfil de IA do tenant (ou null se não configurado)
- *
- * POST /api/telegram/ai-profile
- *   → Cria ou atualiza o perfil de IA
- */
 export async function GET(req: NextRequest) {
-  const tenantId = req.nextUrl.searchParams.get('tenantId');
-  if (!tenantId) {
-    return NextResponse.json({ success: false, error: 'tenantId obrigatório' }, { status: 400 });
-  }
+  const tenantIdOrError = requireTenantId(req);
+  if (tenantIdOrError instanceof NextResponse) return tenantIdOrError;
+  const tenantId = tenantIdOrError;
 
   try {
     const result = await db.query(
@@ -76,7 +69,7 @@ export async function GET(req: NextRequest) {
     });
   } catch (error) {
     console.error('Erro ao buscar perfil IA:', error);
-    return NextResponse.json({ success: false, error: 'Erro interno' }, { status: 500 });
+    return internalError();
   }
 }
 
@@ -145,6 +138,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Erro ao salvar perfil IA:', error);
-    return NextResponse.json({ success: false, error: 'Erro interno' }, { status: 500 });
+    return internalError();
   }
 }

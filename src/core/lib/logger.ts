@@ -1,3 +1,6 @@
+import type { NetworkError } from '@/core/interfaces';
+import { formatNetworkDetails, extractErrorCause } from '@/core/lib/utils';
+
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
 const SENSITIVE_KEYS = ['apiHash', 'api_hash', 'api_hash_encrypted', 'stelToken', 'password', 'password2fa', 'code', 'random_hash', 'randomHash'];
@@ -18,10 +21,11 @@ function safePrint(data: unknown, depth = 0): string {
     const inner = (data.errors || [])
       .map((e: unknown, i: number) => {
         if (e instanceof Error) {
+          const netErr = e as NetworkError;
           let d = `  [${i}] ${e.name}: ${e.message}`;
-          if ('code' in e) d += ` (code: ${(e as NodeJS.ErrnoException).code})`;
-          if ('address' in e) d += ` (addr: ${(e as NodeJS.ErrnoException).address})`;
-          if (e.cause) d += ` (cause: ${safePrint(e.cause, depth + 1)})`;
+          d += formatNetworkDetails(netErr);
+          const cause = extractErrorCause(e);
+          if (cause) d += ` (cause: ${cause})`;
           return d;
         }
         return `  [${i}] ${String(e)}`;
@@ -31,9 +35,11 @@ function safePrint(data: unknown, depth = 0): string {
   }
 
   if (data instanceof Error) {
+    const netErr = data as NetworkError;
     let msg = `${data.name}: ${data.message}`;
-    if ('code' in data) msg += ` | code: ${(data as NodeJS.ErrnoException).code}`;
-    if (data.cause) msg += ` | cause: ${safePrint(data.cause, depth + 1)}`;
+    msg += formatNetworkDetails(netErr);
+    const cause = extractErrorCause(data);
+    if (cause) msg += ` | cause: ${cause}`;
     if (data.stack && process.env.NODE_ENV !== 'production') {
       const frames = data.stack.split('\n').slice(1, 4).map(l => l.trim()).join(' → ');
       msg += ` | stack: ${frames}`;

@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/core/lib/db';
+import { requireTenantId, parsePagination, buildPaginationMeta, internalError } from '@/core/lib/utils';
 
 export async function GET(req: NextRequest) {
-  const tenantId = req.nextUrl.searchParams.get('tenantId');
+  const tenantIdOrError = requireTenantId(req);
+  if (tenantIdOrError instanceof NextResponse) return tenantIdOrError;
+  const tenantId = tenantIdOrError;
+
   const contactId = req.nextUrl.searchParams.get('contactId');
   const direction = req.nextUrl.searchParams.get('direction');
-  const page = parseInt(req.nextUrl.searchParams.get('page') || '1');
-  const limit = Math.min(parseInt(req.nextUrl.searchParams.get('limit') || '50'), 100);
-  const offset = (page - 1) * limit;
-
-  if (!tenantId) {
-    return NextResponse.json({ success: false, error: 'tenantId obrigatório' }, { status: 400 });
-  }
+  const { page, limit, offset } = parsePagination(req);
 
   try {
     const conditions: string[] = ['m.tenant_id = $1'];
@@ -39,20 +37,9 @@ export async function GET(req: NextRequest) {
 
     const result = await db.query(
       `SELECT
-        m.id,
-        m.contact_id,
-        m.direction,
-        m.content,
-        m.responded_by,
-        m.created_at,
-        m.sentiment,
-        m.category,
-        m.word_count,
-        m.media_type,
-        c.first_name,
-        c.last_name,
-        c.telegram_username,
-        c.telegram_user_id
+        m.id, m.contact_id, m.direction, m.content, m.responded_by,
+        m.created_at, m.sentiment, m.category, m.word_count, m.media_type,
+        c.first_name, c.last_name, c.telegram_username, c.telegram_user_id
       FROM messages m
       JOIN contacts c ON c.id = m.contact_id
       WHERE ${where}
@@ -84,16 +71,11 @@ export async function GET(req: NextRequest) {
             telegramUserId: row.telegram_user_id,
           },
         })),
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit),
-        },
+        pagination: buildPaginationMeta(page, limit, total),
       },
     });
   } catch (error) {
     console.error('Erro ao buscar mensagens:', error);
-    return NextResponse.json({ success: false, error: 'Erro interno' }, { status: 500 });
+    return internalError();
   }
 }
